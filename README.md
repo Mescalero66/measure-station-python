@@ -29,16 +29,19 @@ It is built to run unattended:
 | Storage | WAL-mode SQLite; corrupt DB files are quarantined and replaced | Power loss, SD-card corruption |
 
 Readings that have not yet been written to the outbox are held in memory for up to
-`RECORDER_FLUSH_INTERVAL_S` (10 s by default; see [SD card wear](#sd-card-wear)). A clean
+`RECORDER_FLUSH_INTERVAL_S` (10 s by default; see [SD Card Wear](docs/sd-card-wear.md)). A clean
 stop or reboot writes them first. A power cut or hard kill loses them.
 
 Concurrency uses `asyncio`. Blocking hardware I/O (sensor reads, serial reads, SQLite)
 runs in a bounded worker thread pool via `asyncio.to_thread`, so a slow device never
 stalls the rest of the station.
 
-## Project layout
+
+## Project Layout
 
 ```
+├── README.md                       # overview, architecture, documentation index
+├── docs/                           # these documents
 ├── deploy/
 │   ├── install.sh                  # provisions a fresh Raspberry Pi OS install
 │   ├── env.example                 # template for /etc/measure-station/env (secrets)
@@ -64,369 +67,32 @@ stalls the rest of the station.
 └── tests/
 ```
 
-## Raspberry Pi setup (fresh install)
+## Documentation
 
-1. **Flash the OS.** In Raspberry Pi Imager, choose **Raspberry Pi OS Lite (32-bit)**,
-   which the Pi 2B needs. In the advanced options, set the hostname (this becomes the
-   default `STATION_ID`), enable SSH and create your user.
+**Setting Up and Running a Station**
 
-2. **Clone and install.** Over SSH:
+- [Raspberry Pi Setup](docs/raspberry-pi-setup.md): from a fresh Raspberry Pi OS install
+  to a running service.
+- [Operating](docs/operating.md): status, logs, applying configuration changes, updating.
+- [SD Card Wear](docs/sd-card-wear.md): what the station writes, and how to make the card
+  last.
 
-   ```bash
-   sudo apt-get update && sudo apt-get install -y git
-   sudo git clone <repo-url> /opt/measure-station
-   sudo bash /opt/measure-station/deploy/install.sh
-   ```
+**Data and Integration**
 
-   The installer:
-   - installs system packages
-   - enables I2C and the hardware UART, and turns off the serial login console
-   - enables NTP
-   - creates a `measure-station` system user with `i2c`, `dialout` and `gpio` access
-   - builds a virtualenv in `/opt/measure-station/.venv`
-   - installs the systemd service, hardware watchdog and journald limits
+- [MQTT Messages](docs/mqtt-messages.md): topics, payloads and timestamp quality.
+- [Timestamps Without a Real-Time Clock](docs/timekeeping.md): how readings get accurate
+  times before NTP sync, and using a local NTP server.
+- [Broker and Consumer Requirements](docs/broker-and-consumer.md): what the MQTT broker and
+  the storage/processing system must do so no data is lost.
 
-   It is safe to re-run.
+**Hardware**
 
-3. **Configure.**
+- [MQ Gas Board](docs/mq-gas-board.md): wiring, what's published, and how readings are
+  handled.
+- [MQ Gas Board UART Interface](docs/uart-interface.md): the board's `$PMQB` sentence
+  specification.
+- [Adding a Sensor](docs/adding-a-sensor.md): writing and registering a new sensor driver.
 
-   ```bash
-   sudo nano /opt/measure-station/src/measure_station/sysconfig.py   # broker, NTP, sensors, UARTs
-   sudo nano /etc/measure-station/env                                # MQTT credentials
-   ```
+**Development**
 
-   If the station can't reach the internet, set `NTP_SERVERS` to a local time server.
-   See [Using a local NTP server](#using-a-local-ntp-server).
-
-4. **Reboot** to apply the I2C, UART and watchdog changes: `sudo reboot`.
-   The service starts automatically on boot.
-
-## Operating
-
-```bash
-systemctl status measure-station           # is it running?
-journalctl -u measure-station -f           # follow the logs
-sudo systemctl restart measure-station     # apply sysconfig.py changes (including NTP_SERVERS)
-timedatectl timesync-status                # which NTP server is in use, and sync state
-sqlite3 /var/lib/measure-station/outbox.sqlite3 'select count(*) from outbox'   # backlog
-```
-
-If the configuration is invalid, the service logs `Configuration error: ...` and stops
-instead of restart-looping (exit code 78). Fix the config, then restart the service.
-
-To update the code: `cd /opt/measure-station && sudo git pull && sudo systemctl restart measure-station`.
-Local edits to `sysconfig.py` will conflict with upstream changes to that file. Keep
-per-device values (host, credentials, station ID) in `/etc/measure-station/env` where possible.
-
-## SD card wear
-
-Flash wears out from writes, not reads. SQLite rewrites whole 4 KiB pages on every
-transaction, so writing each ~200-byte reading on its own costs about 8 KiB of writes.
-The recorder therefore groups readings into one transaction per
-`RECORDER_FLUSH_INTERVAL_S`, which brings the cost down to about 0.8 KiB per reading (measured).
-
-| `RECORDER_FLUSH_INTERVAL_S` | Writes per reading | Lost on power cut | Extra MQTT latency |
-|---|---|---|---|
-| `0` | ~8 KiB | nothing already recorded | none |
-| `10` (default) | ~0.8 KiB if ≥10 readings arrive per interval | up to 10 s of readings | up to 10 s |
-
-The grouping only pays off when several readings arrive within each interval. A station
-with just a few slow sensors writes very little either way. Beyond the software:
-
-- Use a high-endurance card (e.g. SanDisk High Endurance or Samsung PRO Endurance).
-- Unclean power loss can damage a card's internal bookkeeping. If mains power is
-  unreliable, add a UPS or supercapacitor HAT.
-- To keep system logs in RAM only, set `Storage=volatile` in `deploy/systemd/journald.conf`.
-  You lose the logs across reboots.
-
-## MQTT messages
-
-| Topic | Payload |
-|---|---|
-| `<base>/<station>/<source>` | `{"station", "source", "ts", "ts_quality", "values": {...}}` |
-| `<base>/<station>/status` | `online` / `offline` (retained; `offline` is also the last-will) |
-| `<base>/<station>/health` | uptime, outbox backlog, queue depth, task restarts, clock sync, load, memory, disk |
-
-`ts` is the UTC capture time, not the send time, so buffered data keeps its true
-timestamp. Delivery is **at-least-once** (QoS 1), which means a reading can arrive twice
-around a reconnect. Consumers should de-duplicate on `(station, source, ts)`.
-
-`ts_quality` says how far `ts` can be trusted (see [Timestamps without a real-time
-clock](#timestamps-without-a-real-time-clock)):
-
-| `ts_quality` | Meaning | Accuracy |
-|---|---|---|
-| `ntp` | Captured while the clock was NTP-synchronised | NTP accuracy |
-| `corrected` | Captured before sync and back-dated once sync was reached | Within seconds over a day offline (crystal drift) |
-| `estimated` | Could not be corrected; `ts` is the unsynchronised system clock | Unreliable. The payload also carries `boot_id` and `boot_ts` |
-
-## Timestamps without a real-time clock
-
-The Pi has no battery-backed clock. After a boot without NTP, the system clock resumes
-from roughly the last shutdown time and then jumps when NTP syncs. To keep timestamps
-accurate anyway:
-
-1. **Every reading records two clocks:** the wall clock, and the *boot clock*
-   (`CLOCK_BOOTTIME`, seconds since boot). NTP never changes the boot clock.
-2. **Until NTP sync is detected**, readings are stored in the outbox as `pending`, tagged
-   with the kernel's `boot_id`, and are **not published**.
-3. **When sync is detected**, the station computes `offset = wall clock − boot clock`.
-   One `UPDATE` then sets `ts = boot_ts + offset` for every pending reading from this
-   boot, and those readings are released as `corrected`.
-4. **Some readings can't be corrected.** If the Pi rebooted before ever syncing, that
-   boot's offset is unknowable. Those readings are released immediately as `estimated`.
-   So are readings held longer than `TIME_SYNC_MAX_HOLD_S` (24 h by default).
-
-Settings: `TIME_SYNC_POLL_S` and `TIME_SYNC_MAX_HOLD_S` in `sysconfig.py`. While held,
-readings show up in the health topic as `awaiting_time_sync`.
-
-The fewer readings that need correcting, the better. Two ways to get there:
-
-- **Use a local NTP server** (below), so the clock syncs whenever the local network is
-  up, even without internet access.
-- **Add an RTC module** (e.g. DS3231) for accurate time through outages *and* reboots.
-
-### Using a local NTP server
-
-NTP needs a *reachable* NTP server, not internet access. By default the Pi uses Debian's
-public pool, so a station without internet never syncs. To use a server on the local
-network instead (typically the broker host), list it in `sysconfig.py`, in order of
-preference:
-
-```python
-NTP_SERVERS: list[str] = _env_list("NTP_SERVERS") or ["192.168.1.10", "pool.ntp.org"]
-```
-
-Or set it per device in `/etc/measure-station/env`:
-`MEASURE_STATION_NTP_SERVERS=192.168.1.10,pool.ntp.org`. Then run
-`sudo systemctl restart measure-station`.
-
-How it works:
-
-- On every service start, a small step (`measure_station.ntp_setup`) runs as root before
-  the station itself. It writes the list to
-  `/etc/systemd/timesyncd.conf.d/measure-station.conf`, and restarts `systemd-timesyncd`
-  only if the list changed.
-- An empty list removes that file, so the OS defaults return.
-- Entries must be plain host names or IP addresses. Anything else is a configuration
-  error and the station won't start.
-- If this step fails, the error is logged and the station still starts, keeping the
-  previous NTP settings.
-- It only configures `systemd-timesyncd`, the Raspberry Pi OS default. If you've switched
-  to another NTP daemon (e.g. chrony), it logs a warning and you configure that daemon
-  yourself.
-
-To check it's working, run `timedatectl timesync-status`. The `Server:` line should show
-your local server. The health topic's `clock_synced` should become `true` shortly after
-boot.
-
-**Setting up the server** (on the broker host or any always-on machine on the LAN), with
-chrony as an example:
-
-```bash
-sudo apt-get install -y chrony
-echo "allow 192.168.1.0/24" | sudo tee /etc/chrony/conf.d/stations.conf   # your station subnet
-# Only if this host itself has no internet/upstream NTP: serve its own clock anyway,
-# so stations at least agree with the server (and with each other).
-echo "local stratum 10" | sudo tee -a /etc/chrony/conf.d/stations.conf
-sudo systemctl restart chrony
-```
-
-Allow UDP port 123 through any firewall between the stations and the server. If the server
-has no upstream time source, all timestamps are only as accurate as its clock. That's
-still consistent across stations, and still far better than a Pi that never syncs.
-
-## Broker and consumer requirements
-
-This section is for whoever runs the MQTT broker and the system that stores or processes
-station data. The station's guarantee ends at the broker, so whether data actually reaches
-storage depends on how the broker and consumer are configured.
-
-### What the station guarantees
-
-The station keeps every reading in its outbox until the broker sends a **PUBACK** (QoS 1).
-A PUBACK confirms only that *the broker* received the message, not that any subscriber
-did. MQTT has no end-to-end acknowledgement. Once PUBACK arrives the station deletes its
-copy, so from then on the broker is responsible for the message. A broker can acknowledge
-a message and still lose it if:
-
-- no subscriber is connected and none has a persistent session, so the broker discards
-  the message; or
-- the broker restarts before writing the message to disk.
-
-### Broker
-
-- **Enable persistence**, and save often enough that a broker crash loses little.
-  Mosquitto's default `autosave_interval` is 1800 s, so it can lose 30 minutes of data.
-- **Raise the per-client queue limit.** It must be able to hold a whole station backlog
-  while the consumer is offline. Mosquitto's default `max_queued_messages` is 1000, and
-  messages beyond that are dropped.
-- **Grant each station publish rights** (including retained messages) on
-  `<base>/<station>/#`.
-- **Consider serving NTP from the broker host** if stations have no internet access. See
-  [Using a local NTP server](#using-a-local-ntp-server).
-
-Example Mosquitto settings:
-
-```conf
-persistence true
-persistence_location /var/lib/mosquitto/
-autosave_interval 60
-max_queued_messages 0        # unlimited; or size it to your longest expected consumer outage
-max_queued_bytes 0
-```
-
-Other brokers have equivalents. Check limits on session expiry and queued messages,
-especially on managed cloud brokers.
-
-### Consumer (storage or processing)
-
-- **Use a persistent session**, so the broker queues messages while the consumer is down.
-  Give it a fixed client ID, and connect with `clean_session=False` (MQTT 3.1.1), or with
-  `clean_start=False` and a non-zero session expiry interval (MQTT 5).
-- **Subscribe at QoS 1.** A message is delivered at the lower of the publish and
-  subscription QoS. A QoS 0 subscription downgrades delivery to at-most-once, and brokers
-  generally don't queue QoS 0 messages for offline clients.
-- **Acknowledge only after the data is stored.** If the consumer acknowledges first and
-  then crashes before writing, the message is lost. With paho-mqtt 2.x, use
-  `manual_ack=True` and call `client.ack(mid, qos)` after the write commits.
-- **De-duplicate on `(station, source, ts)`**, for example with a unique constraint.
-  Delivery is at-least-once, so duplicates occur around reconnects.
-- **Order by `ts`, not arrival order.** The station sends messages in concurrent batches
-  and resends after reconnects, so arrival order isn't guaranteed.
-- **Expect late data.** After an outage, readings arrive hours or days late with their
-  original `ts`. Aggregations and alerts must handle data arriving after its time window.
-  Readings taken before the station's clock synced are deliberately held until they can
-  be corrected, so they can arrive late even when the network was up.
-- **Check `ts_quality`.** Treat `estimated` timestamps as approximate: flag them, or
-  exclude them from time-sensitive analysis.
-
-### Monitoring
-
-- `<base>/<station>/status` is retained. It changes to `offline` on a clean stop, or via
-  the last-will when the connection drops.
-- On `<base>/<station>/health`, a rising `outbox_backlog` means data is waiting to be sent.
-  If no health message arrives for several `HEALTH_INTERVAL_S` periods, the station is
-  unreachable or stalled.
-
-### End-to-end acknowledgement (not implemented)
-
-If the station must keep data until the *storage system* confirms it, the storage system
-would publish acknowledgements to a topic the station subscribes to, and the station would
-delete outbox rows only on that acknowledgement. Getting the broker and consumer settings
-above right covers most of the same risk with configuration alone.
-
-## Adding a sensor
-
-1. Create `src/measure_station/sensors/my_sensor.py`:
-
-   ```python
-   from measure_station.sensors.base import Sensor
-
-
-   class MySensor(Sensor):
-       def __init__(self, name, interval_s, pin=4):
-           super().__init__(name, interval_s)
-           self._pin = pin
-
-       def open(self):  # acquire hardware (called again after any failure)
-           ...
-
-       def read(self):  # blocking; runs in a worker thread
-           return {"lux": 123.4}
-
-       def close(self): ...
-   ```
-
-2. Register it in `SENSOR_TYPES` in `sensors/__init__.py`.
-3. Add an entry to `SENSORS` in `sysconfig.py`, e.g.
-   `{"type": "my_sensor", "name": "light", "interval_s": 10, "pin": 4}`.
-
-## MQ gas board
-
-The MQ board (six MQ gas sensors on an ESP32-S3) broadcasts NMEA-style `$PMQB` sentences,
-as specified in the board's `INTERFACE.md`. It re-sends the latest reading of every
-sensor about every 10 s and reads each sensor every 150 s, so most sentences are repeats.
-
-**Wiring**
-- Board TX → Pi RX (GPIO15, pin 10).
-- Common ground.
-- Both sides use 3.3 V logic, so no level shifter is needed.
-- The board only transmits, so Pi TX is unused.
-- The station reads it on `/dev/serial0` at 115200 8N1 (`MQBOARD_*` in `sysconfig.py`).
-  The installer enables the UART and turns off the serial login console that would
-  otherwise use it.
-
-**What gets published**
-One MQTT source per sensor: `<MQBOARD_SOURCE_PREFIX><sensor>`, e.g.
-`measure-station/pi-01/mqboard-mq4`. Each new reading is sent once:
-
-```json
-{"station": "pi-01", "source": "mqboard-mq4", "ts": "2026-10-13T09:40:01.000+00:00",
- "ts_quality": "ntp",
- "values": {"gas": "CH4", "ppm": 17.85, "temp_c": 23.19, "tracking": true,
-            "r0": 5.401877, "board_t_s": 86451, "ts_basis": "board"}}
-```
-
-- **Fields are as the board sent them.** Empty fields become `null` (never 0).
-  `nan`/`inf` also become `null`.
-- **Read faults are published.** A failed read (new `board_t_s`, `ppm: null`) is sent,
-  not dropped, so consumers can see sensor faults.
-- **The station doesn't interpret the data.** Deciding whether a `tracking: false`
-  reading is provisional, or whether `r0` = 10.0 is a placeholder, is left to consumers.
-  So is recomputing ppm against another R0.
-- **De-duplication key.** `board_t_s` identifies the reading, so consumers can
-  de-duplicate on `(source, board_t_s)` within one board boot.
-
-**How readings are handled**
-
-- **Repeats** are dropped in memory and never written to the SD card. Only new readings
-  are stored: 6 per 150 s.
-- **Station restarts.** The last `t_s` recorded per sensor is saved in the outbox, in
-  the same transaction as the reading itself. After a station restart, readings already
-  recorded aren't sent again. If the station dies with readings still in memory, the
-  board is still repeating them, so they're picked up again on restart (if it's back
-  within about 150 s).
-- **Board restarts** are detected when a sensor's `t_s` goes backwards, or when its
-  sentence turns empty.
-- **Timestamps.** The board has no clock; `t_s` is its uptime. The station estimates
-  when the board booted, as the minimum of `arrival time − t_s` over the last hour of
-  newly seen readings, and timestamps each reading as `board boot + t_s`. That's within
-  about a second of when the reading was actually taken. These timestamps then go
-  through the station's own clock-sync correction like any other reading.
-- **Held readings.** A reading already on the line when the station starts can be up
-  to 150 s old. It's held until a reading is seen arriving fresh (within about 25 s),
-  then sent with its true capture time. If no estimate arrives within `max_hold_s`, it's
-  sent anyway, timestamped on arrival, with `ts_basis: "receipt"`.
-- **Corrupt lines** (bad checksum, framing or field) are discarded. The board repeats
-  every reading, so nothing is lost. They're counted, and summarised in the log at most
-  once per minute.
-
-**Health and alerts**
-- The health topic includes `mqboard_up`, `mqboard_stale_sensors`,
-  `mqboard_bad_lines`, `mqboard_last_line_age_s` and `mqboard_held`.
-- The log warns if no valid sentence arrives for 30 s, if a sensor's reading stops
-  changing for 300 s, and when a board restart is detected.
-
-**Settings:** `MQBOARD_*` in `sysconfig.py`. Defaults follow the board's spec.
-
-## Development
-
-The package runs on any OS. Hardware drivers are optional, and the `simulated`
-sensor generates data so you can exercise the pipeline.
-
-```bash
-python -m venv .venv
-.venv/bin/pip install -e ".[dev]"     # Windows: .venv\Scripts\pip
-.venv/bin/pytest
-.venv/bin/ruff check . && .venv/bin/ruff format --check .
-.venv/bin/python -m measure_station   # data goes to ./data when not under systemd
-```
-
-To test without the MQ board, set `MQBOARD_PORT` to a pyserial URL such as
-`socket://127.0.0.1:7777`, and serve simulated `$PMQB` sentences from that TCP port.
-Or set `MQBOARD_ENABLED = False`.
-
-Always run the station with `python -m measure_station`, never by file path. Running
-a file inside the package would put that directory on `sys.path`, and then
-`sysconfig.py` would shadow the standard library's `sysconfig` module.
+- [Development](docs/development.md): running tests and the station on a dev machine.

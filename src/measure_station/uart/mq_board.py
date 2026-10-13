@@ -1,18 +1,18 @@
-"""Decoder for the MQ gas sensor board's ``$PMQB`` sentences (see the board's INTERFACE.md).
+"""Decoder for the MQ gas sensor board's ``$PMQB`` sentences (see docs/uart-interface.md).
 
 The board broadcasts the latest reading of each of its six sensors every ~10 s, as
 NMEA-style sentences::
 
-    $PMQB,<name>,<t_s>,<gas>,<ppm>,<temp_c>,<tracking>,<r0>*<CS>
+    $PMQB,<name>,<uptime_s>,<gas>,<concentration_ppm>,<temperature_c>,<baseline_tracking>,<r0_kohm>*<CS>
 
-A reading is identified by its sensor ``name`` and ``t_s`` (board uptime in seconds
+A reading is identified by its sensor ``name`` and ``uptime_s`` (board uptime in seconds
 when it was taken), and is repeated ~15 times until that sensor is read again. This
 decoder:
 
 * validates and parses sentences (checksum, address, fields; empty field = null);
-* emits each reading once, remembering the last ``t_s`` per sensor across station
+* emits each reading once, remembering the last ``uptime_s`` per sensor across station
   restarts (via :class:`SeenMarker`, saved in the outbox with the reading itself);
-* detects board restarts (``t_s`` goes backwards, or a sensor's ``t_s`` goes empty);
+* detects board restarts (``uptime_s`` goes backwards, or a sensor's ``uptime_s`` goes empty);
 * timestamps readings by estimating when the board booted (see
   :class:`BoardBootEstimator`), holding readings until a trustworthy estimate exists;
 * watches for stale sensors and a silent link.
@@ -54,12 +54,12 @@ class Received(NamedTuple):
 
 class PmqbSentence(NamedTuple):
     name: str
-    t_s: int | None
+    uptime_s: int | None
     gas: str | None
-    ppm: float | None
-    temp_c: float | None
-    tracking: bool | None
-    r0: float | None
+    concentration_ppm: float | None
+    temperature_c: float | None
+    baseline_tracking: bool | None
+    r0_kohm: float | None
 
 
 def nmea_checksum(body: str) -> int:
@@ -94,19 +94,20 @@ def parse_sentence(line: bytes) -> PmqbSentence | None:
         return None
     if len(fields) < 8:
         raise ParseError(f"expected 7 fields, got {len(fields) - 1}")
-    name, t_s, gas, ppm, temp_c, tracking, r0 = fields[1:8]  # extra fields are ignored
+    # Positional, per the spec; extra trailing fields are ignored.
+    name, uptime_s, gas, concentration_ppm, temperature_c, baseline_tracking, r0_kohm = fields[1:8]
     if not name:
         raise ParseError("empty sensor name")
-    if tracking not in ("", "0", "1"):
-        raise ParseError(f"tracking must be 0 or 1, got {tracking!r}")
+    if baseline_tracking not in ("", "0", "1"):
+        raise ParseError(f"baseline_tracking must be 0 or 1, got {baseline_tracking!r}")
     return PmqbSentence(
         name=name,
-        t_s=_optional_int(t_s),
+        uptime_s=_optional_int(uptime_s),
         gas=gas or None,
-        ppm=_optional_float(ppm),
-        temp_c=_optional_float(temp_c),
-        tracking=None if tracking == "" else tracking == "1",
-        r0=_optional_float(r0),
+        concentration_ppm=_optional_float(concentration_ppm),
+        temperature_c=_optional_float(temperature_c),
+        baseline_tracking=None if baseline_tracking == "" else baseline_tracking == "1",
+        r0_kohm=_optional_float(r0_kohm),
     )
 
 
@@ -133,12 +134,12 @@ def _optional_float(field: str) -> float | None:
 class BoardBootEstimator:
     """Estimates when the board booted, in station boot-clock seconds.
 
-    Every new reading bounds it: the board booted no later than ``received - t_s``,
+    Every new reading bounds it: the board booted no later than ``received - uptime_s``,
     because a reading is always broadcast after it was taken. The minimum over recent
     samples is the estimate; with a few dozen samples whose broadcast delays are
     spread over 0-10 s, it lands within a fraction of a second.
 
-    Only *fresh* samples count: a ``t_s`` change seen within one broadcast of the
+    Only *fresh* samples count: an ``uptime_s`` change seen within one broadcast of the
     previous sentence for that sensor, so its delay is known to be small. A reading
     that was already on the line when the station started may be up to 150 s old.
 
@@ -148,7 +149,7 @@ class BoardBootEstimator:
 
     def __init__(self, window_s: float) -> None:
         self._window_s = window_s
-        self._samples: deque[tuple[float, float]] = deque()  # (received, received - t_s)
+        self._samples: deque[tuple[float, float]] = deque()  # (received, received - uptime_s)
 
     @property
     def ready(self) -> bool:
@@ -158,8 +159,8 @@ class BoardBootEstimator:
     def estimate(self) -> float | None:
         return min(bound for _, bound in self._samples) if self._samples else None
 
-    def add(self, received: float, t_s: int) -> None:
-        self._samples.append((received, received - t_s))
+    def add(self, received: float, uptime_s: int) -> None:
+        self._samples.append((received, received - uptime_s))
         # Keep at least the newest sample, so a long link outage doesn't discard the
         # estimate and hold readings again.
         while len(self._samples) > 1 and self._samples[0][0] < received - self._window_s:
@@ -171,9 +172,9 @@ class BoardBootEstimator:
 
 @dataclass
 class _SensorState:
-    last_t_s: int | None = None  # None: not read since (our knowledge of) the board's boot
+    last_uptime_s: int | None = None  # None: not read since (our knowledge of) the board's boot
     last_sentence_at: float | None = None  # any sentence for this sensor
-    last_new_at: float | None = None  # last t_s change, for stale detection
+    last_new_at: float | None = None  # last uptime_s change, for stale detection
     stale: bool = False
 
 
@@ -206,7 +207,9 @@ class MqBoardDecoder:
         last_seen = last_seen or {}
         self.bad_lines = 0  # incremented by the reader for every discarded line
         self.last_valid_at: float | None = None  # station boot clock
-        self._sensors = {name: _SensorState(last_t_s=last_seen.get(name)) for name in KNOWN_SENSORS}
+        self._sensors = {
+            name: _SensorState(last_uptime_s=last_seen.get(name)) for name in KNOWN_SENSORS
+        }
         self._source_prefix = source_prefix
         self._fresh_gap_s = fresh_gap_s
         self._max_hold_s = max_hold_s
@@ -245,27 +248,27 @@ class MqBoardDecoder:
         if state.last_new_at is None:
             state.last_new_at = now  # start the stale timer at first sight
 
-        t_s = sentence.t_s
-        if t_s is None:  # sensor not read since the board booted
-            if state.last_t_s is not None:
+        uptime_s = sentence.uptime_s
+        if uptime_s is None:  # sensor not read since the board booted
+            if state.last_uptime_s is not None:
                 self._board_restarted(f"{sentence.name} has no reading any more", now)
             return []
-        if state.last_t_s is not None:
-            if t_s == state.last_t_s:
+        if state.last_uptime_s is not None:
+            if uptime_s == state.last_uptime_s:
                 return []  # repeat of a reading already recorded
-            if t_s < state.last_t_s:
+            if uptime_s < state.last_uptime_s:
                 self._board_restarted(
-                    f"{sentence.name} t_s went from {state.last_t_s} to {t_s}", now
+                    f"{sentence.name} uptime_s went from {state.last_uptime_s} to {uptime_s}", now
                 )
 
-        state.last_t_s = t_s
+        state.last_uptime_s = uptime_s
         state.last_new_at = now
         if state.stale:
             state.stale = False
             log.info("MQ board: sensor %s is updating again", sentence.name)
 
         if previous_sentence_at is not None and now - previous_sentence_at <= self._fresh_gap_s:
-            self._estimator.add(now, t_s)
+            self._estimator.add(now, uptime_s)
         self._held.append(_Held(sentence, received, self._board_epoch))
         return self._release(now)
 
@@ -293,10 +296,10 @@ class MqBoardDecoder:
         log.warning("MQ board: restart detected (%s)", reason)
         self._board_epoch += 1
         self._estimator.reset()
-        # Every sensor restarts with the board: old t_s values no longer apply, and
+        # Every sensor restarts with the board: old uptime_s values no longer apply, and
         # each sensor gets a full cycle to deliver its first reading before it's stale.
         for state in self._sensors.values():
-            state.last_t_s = None
+            state.last_uptime_s = None
             state.last_new_at = now
 
     def _release(self, now: float) -> list[Reading]:
@@ -313,7 +316,7 @@ class MqBoardDecoder:
                 )
                 released.append(self._reading(held, captured_at=None))
             elif estimate is not None:
-                released.append(self._reading(held, captured_at=estimate + held.sentence.t_s))
+                released.append(self._reading(held, captured_at=estimate + held.sentence.uptime_s))
             elif now - held.received.boot_ts > self._max_hold_s:
                 log.warning(
                     "MQ board: no clock estimate after %.0f s; %s reading timestamped on receipt",
@@ -336,18 +339,19 @@ class MqBoardDecoder:
         s = held.sentence
         return Reading(
             source=self.source_for(s.name),
+            # The board's fields, under the board's own names, plus ts_basis.
             values={
                 "gas": s.gas,
-                "ppm": s.ppm,
-                "temp_c": s.temp_c,
-                "tracking": s.tracking,
-                "r0": s.r0,
-                "board_t_s": s.t_s,
+                "concentration_ppm": s.concentration_ppm,
+                "temperature_c": s.temperature_c,
+                "baseline_tracking": s.baseline_tracking,
+                "r0_kohm": s.r0_kohm,
+                "uptime_s": s.uptime_s,
                 "ts_basis": basis,
             },
             timestamp=received.wall_ts - (received.boot_ts - captured),
             boot_ts=captured,
-            seen=SeenMarker(s.name, s.t_s),
+            seen=SeenMarker(s.name, s.uptime_s),
         )
 
     def _check_link(self, now: float) -> None:

@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -6,7 +5,7 @@ import pytest
 from conftest import FakeTime, make_outbox
 from measure_station.clock import ClockState
 from measure_station.models import Reading, SeenMarker
-from measure_station.storage import SCHEMA_VERSION, Outbox
+from measure_station.storage import Outbox
 
 
 @pytest.fixture
@@ -75,24 +74,6 @@ def test_corrupt_file_is_quarantined_and_replaced(
     box.close()
 
     assert list(tmp_path.glob("outbox.sqlite3.corrupt-*"))
-
-
-def test_old_schema_is_set_aside(tmp_path: Path, synced_clock: ClockState) -> None:
-    path = tmp_path / "outbox.sqlite3"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE outbox (id INTEGER PRIMARY KEY, topic TEXT, payload TEXT)")
-    conn.execute("INSERT INTO outbox (topic, payload) VALUES ('t', 'p')")
-    conn.commit()
-    conn.close()
-
-    box = make_outbox(path, synced_clock)
-    assert box.count() == 0
-    box.close()
-
-    assert list(tmp_path.glob("outbox.sqlite3.old-schema-*"))
-    conn = sqlite3.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    conn.close()
 
 
 def test_rejects_invalid_synchronous_mode(tmp_path: Path, synced_clock: ClockState) -> None:

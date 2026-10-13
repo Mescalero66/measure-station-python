@@ -19,4 +19,4 @@ class CpuTemperatureSensor(Sensor):
 
     def read(self) -> dict[str, float]:
         millidegrees = int(self._path.read_text().strip())
-        return {"cpu_temp_c": round(millidegrees / 1000, 2)}
+        return {"temperature_c": round(millidegrees / 1000, 2)}

@@ -1,17 +1,19 @@
-"""MQ gas board ($PMQB) decoder, tested against the board's INTERFACE.md."""
+"""MQ gas board ($PMQB) decoder, tested against docs/uart-interface.md."""
 
 from __future__ import annotations
 
 import math
+import re
 from functools import reduce
 from operator import xor
+from pathlib import Path
 
 import pytest
 
 from measure_station.uart import ParseError, Received
 from measure_station.uart.mq_board import KNOWN_SENSORS, MqBoardDecoder, parse_sentence
 
-# Every example sentence in INTERFACE.md, verbatim.
+# Every example sentence in docs/uart-interface.md, verbatim.
 SPEC_EXAMPLES = [
     "$PMQB,MQ4,86451,CH4,17.85,23.19,1,5.401877*2E",
     "$PMQB,MQ2,26,SMK,12.97,22.44,0,0.606521*78",
@@ -42,12 +44,15 @@ SPEC_EXAMPLES = [
 GAS = {"MQ2": "SMK", "MQ4": "CH4", "MQ5": "LPG", "MQ7": "CO", "MQ8": "H2", "MQ135": "NH3"}
 
 
-def sentence(name: str, t_s: int | None = None, ppm: float = 1.0, address: str = "PMQB") -> bytes:
-    """Build a valid sentence (empty fields when t_s is None, as at board boot)."""
-    if t_s is None:
+def sentence(
+    name: str, uptime_s: int | None = None, concentration_ppm: float = 1.0, address: str = "PMQB"
+) -> bytes:
+    """Build a valid sentence (empty fields when uptime_s is None, as at board boot)."""
+    if uptime_s is None:
         body = f"{address},{name},,{GAS.get(name, 'X')},,,,"
     else:
-        body = f"{address},{name},{t_s},{GAS.get(name, 'X')},{ppm:.2f},22.50,1,1.234567"
+        gas = GAS.get(name, "X")
+        body = f"{address},{name},{uptime_s},{gas},{concentration_ppm:.2f},22.50,1,1.234567"
     cs = reduce(xor, body.encode(), 0)
     return f"${body}*{cs:02X}\r\n".encode()
 
@@ -57,6 +62,16 @@ def at(boot_ts: float) -> Received:
 
 
 # --------------------------------------------------------------------------- parsing
+
+
+INTERFACE_DOC = Path(__file__).parents[1] / "docs" / "uart-interface.md"
+
+
+def test_interface_doc_examples_are_valid_and_match_the_fixtures() -> None:
+    documented = re.findall(r"\$PMQB\S*\*[0-9A-F]{2}", INTERFACE_DOC.read_text(encoding="utf-8"))
+    assert set(documented) == set(SPEC_EXAMPLES)
+    for line in documented:
+        assert parse_sentence(line.encode()) is not None, line
 
 
 class TestParseSentence:
@@ -70,7 +85,14 @@ class TestParseSentence:
 
     def test_empty_fields_are_null_not_zero(self) -> None:
         s = parse_sentence(b"$PMQB,MQ2,,SMK,,,,*59")
-        assert (s.t_s, s.gas, s.ppm, s.temp_c, s.tracking, s.r0) == (
+        assert (
+            s.uptime_s,
+            s.gas,
+            s.concentration_ppm,
+            s.temperature_c,
+            s.baseline_tracking,
+            s.r0_kohm,
+        ) == (
             None,
             "SMK",
             None,
@@ -81,7 +103,7 @@ class TestParseSentence:
 
     def test_read_fault_has_new_t_s_and_null_ppm(self) -> None:
         s = parse_sentence(b"$PMQB,MQ4,86601,CH4,,23.19,1,5.401877*0C")
-        assert (s.t_s, s.ppm, s.temp_c) == (86601, None, 23.19)
+        assert (s.uptime_s, s.concentration_ppm, s.temperature_c) == (86601, None, 23.19)
 
     def test_bad_checksum_rejected(self) -> None:
         with pytest.raises(ParseError, match="checksum mismatch"):
@@ -103,7 +125,7 @@ class TestParseSentence:
 
     def test_leading_noise_including_dollar_is_skipped(self) -> None:
         line = b"\x00\xff$garb$PMQB,MQ2,26,SMK,12.97,22.44,0,0.606521*78"
-        assert parse_sentence(line).t_s == 26
+        assert parse_sentence(line).uptime_s == 26
 
     def test_other_address_ignored(self) -> None:
         assert parse_sentence(sentence("MQ2", 26, address="GPGGA")) is None
@@ -117,23 +139,23 @@ class TestParseSentence:
     def test_extra_trailing_fields_ignored(self) -> None:
         body = "PMQB,MQ2,26,SMK,12.97,22.44,0,0.606521,future,field"
         line = f"${body}*{reduce(xor, body.encode(), 0):02X}".encode()
-        assert parse_sentence(line).r0 == 0.606521
+        assert parse_sentence(line).r0_kohm == 0.606521
 
     @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
     def test_non_finite_numbers_become_null(self, value: str) -> None:
         body = f"PMQB,MQ2,26,SMK,{value},22.44,0,0.606521"
         line = f"${body}*{reduce(xor, body.encode(), 0):02X}".encode()
-        assert parse_sentence(line).ppm is None
+        assert parse_sentence(line).concentration_ppm is None
 
 
 # --------------------------------------------------------------------------- decoding
 
 
-def broadcast(decoder: MqBoardDecoder, when: float, t_s: dict[str, int | None]) -> list:
+def broadcast(decoder: MqBoardDecoder, when: float, uptime_s: dict[str, int | None]) -> list:
     """Feed one broadcast (all six sentences) received at station time ``when``."""
     out = []
     for name in KNOWN_SENSORS:
-        out += decoder.feed(sentence(name, t_s.get(name)), at(when))
+        out += decoder.feed(sentence(name, uptime_s.get(name)), at(when))
     return out
 
 
@@ -147,15 +169,16 @@ class TestDecoder:
 
     def test_each_reading_emitted_once_and_timestamped(self) -> None:
         decoder = MqBoardDecoder()
-        # Board booted at station time 1000; MQ2 read at t_s=26 (station 1026).
+        # Board booted at station time 1000; MQ2 read at uptime_s=26 (station 1026).
         broadcast(decoder, 1020, EMPTY)
         (reading,) = broadcast(decoder, 1030, {"MQ2": 26})
         assert broadcast(decoder, 1040, {"MQ2": 26}) == []  # repeats dropped
         assert broadcast(decoder, 1050, {"MQ2": 26}) == []
 
         assert reading.source == "mqboard-mq2"
-        assert reading.values["board_t_s"] == 26
+        assert reading.values["uptime_s"] == 26
         assert reading.values["gas"] == "SMK"
+        assert reading.values["baseline_tracking"] is True
         assert reading.values["ts_basis"] == "board"
         assert reading.seen == ("MQ2", 26)
         # One fresh sample with a 4 s broadcast delay: estimate is within 4 s.
@@ -170,7 +193,7 @@ class TestDecoder:
             assert broadcast(decoder, when, state) == []
         assert decoder.status(2020)["held"] == 6
 
-        # Board booted at station 1150, so MQ4's next reading (t_s=876) was taken at 2026.
+        # Board booted at station 1150, so MQ4's next reading (uptime_s=876) was taken at 2026.
         released = broadcast(decoder, 2030, state | {"MQ4": 876})
         assert len(released) == 7
         assert decoder.status(2030)["held"] == 0
@@ -184,7 +207,7 @@ class TestDecoder:
         broadcast(decoder, 990, {"MQ2": 259201})
         broadcast(decoder, 1000, {"MQ2": 259226})
         (reading,) = broadcast(decoder, 1010, {"MQ2": 26})
-        assert reading.values["board_t_s"] == 26
+        assert reading.values["uptime_s"] == 26
 
     def test_restart_detected_from_empty_sentences(self) -> None:
         decoder = MqBoardDecoder()
@@ -210,9 +233,9 @@ class TestDecoder:
         decoder.feed(sentence("MQ4", 86451), at(100))  # held: first sight
         line = b"$PMQB,MQ4,86601,CH4,,23.19,1,5.401877*0C"
         held, fault = decoder.feed(line, at(108))  # fresh: estimate exists, both released
-        assert held.values["ppm"] == 1.0
-        assert fault.values["board_t_s"] == 86601
-        assert fault.values["ppm"] is None
+        assert held.values["concentration_ppm"] == 1.0
+        assert fault.values["uptime_s"] == 86601
+        assert fault.values["concentration_ppm"] is None
 
     def test_falls_back_to_receipt_time_when_no_estimate_arrives(self) -> None:
         decoder = MqBoardDecoder(max_hold_s=300)
@@ -228,7 +251,7 @@ class TestDecoder:
         decoder.check(31)
         assert decoder.status(31)["up"] is False
 
-        # Broadcasts resume, but MQ4's t_s never changes.
+        # Broadcasts resume, but MQ4's uptime_s never changes.
         for i in range(40):
             now = 40 + 10 * i
             broadcast(decoder, now, {"MQ2": 26 + 25 * (i // 3), "MQ4": 51})
@@ -243,11 +266,11 @@ class TestDecoder:
 
 
 class BoardSim:
-    """The board as INTERFACE.md describes it.
+    """The board as docs/uart-interface.md describes it.
 
     Boots at station time ``boot_at``; reads one sensor every 25 s from uptime 26 in a
     fixed order; broadcasts the latest reading of each sensor every ``period`` s.
-    ``drift`` scales the board's clock (1.00005 = 50 ppm fast).
+    ``drift`` scales the board's clock (1.00005 = 50 concentration_ppm fast).
     """
 
     ORDER = ("MQ2", "MQ4", "MQ5", "MQ8", "MQ135", "MQ7")
@@ -259,7 +282,7 @@ class BoardSim:
         return (station_t - self.boot_at) * self.drift
 
     def readings_until(self, station_t: float) -> dict[str, list[int]]:
-        """t_s of every reading each sensor has taken by ``station_t``."""
+        """uptime_s of every reading each sensor has taken by ``station_t``."""
         out: dict[str, list[int]] = {n: [] for n in self.ORDER}
         j = 0
         while 26 + 25 * j <= self.uptime(station_t):
@@ -267,8 +290,8 @@ class BoardSim:
             j += 1
         return out
 
-    def capture_time(self, t_s: int) -> float:
-        return self.boot_at + t_s / self.drift
+    def capture_time(self, uptime_s: int) -> float:
+        return self.boot_at + uptime_s / self.drift
 
     def broadcasts(self, start: float, end: float):
         k = math.ceil((start - self.boot_at) / self.period)
@@ -291,13 +314,13 @@ def test_simulated_hours_every_reading_once_and_accurately_timed(drift: float) -
     expected = board.readings_until(end - board.period)
     got: dict[str, list[int]] = {n: [] for n in KNOWN_SENSORS}
     for r in emitted:
-        got[r.seen.sensor].append(r.seen.t_s)
+        got[r.seen.sensor].append(r.seen.uptime_s)
     for name in KNOWN_SENSORS:
         assert got[name] == expected[name], name  # every reading, once, in order
 
-    # After the estimate has settled, timestamps are within ~1 s (t_s is whole seconds).
+    # After the estimate has settled, timestamps are within ~1 s (uptime_s is whole seconds).
     errors = [
-        abs(r.boot_ts - board.capture_time(r.values["board_t_s"]))
+        abs(r.boot_ts - board.capture_time(r.values["uptime_s"]))
         for r in emitted
         if r.boot_ts > 500.0 + 900
     ]
@@ -315,5 +338,5 @@ def test_simulated_station_restart_mid_run() -> None:
         emitted += broadcast(decoder, t, latest)
 
     for r in emitted:  # nothing recorded before the restart is emitted again
-        assert r.seen.t_s > recorded[r.seen.sensor]
-        assert abs(r.boot_ts - board.capture_time(r.values["board_t_s"])) < 11
+        assert r.seen.uptime_s > recorded[r.seen.sensor]
+        assert abs(r.boot_ts - board.capture_time(r.values["uptime_s"])) < 11

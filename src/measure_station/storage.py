@@ -29,10 +29,6 @@ log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-# Bump when the table layout changes. An outbox file with a different version is set
-# aside (renamed, not deleted) and a fresh one started, rather than crash-looping.
-SCHEMA_VERSION = 1
-
 # No AUTOINCREMENT: it writes an extra page (sqlite_sequence) on every insert, ~1/3 of
 # all outbox writes. A plain rowid is always max(id)+1, so new rows still sort after
 # every pending row; ids may be reused once deleted, which nothing here relies on.
@@ -53,11 +49,11 @@ _SCHEMA = (
     CREATE INDEX IF NOT EXISTS outbox_awaiting_time
         ON outbox (boot_id) WHERE ts_quality = 'pending'
     """,
-    # t_s of the last recorded reading per MQ board sensor (see SeenMarker).
+    # uptime_s of the last recorded reading per MQ board sensor (see SeenMarker).
     """
     CREATE TABLE IF NOT EXISTS mqboard_last_seen (
-        sensor TEXT    PRIMARY KEY,
-        t_s    INTEGER NOT NULL
+        sensor   TEXT    PRIMARY KEY,
+        uptime_s INTEGER NOT NULL
     ) WITHOUT ROWID
     """,
 )
@@ -71,10 +67,6 @@ _VALID_SYNCHRONOUS = frozenset({"OFF", "NORMAL", "FULL", "EXTRA"})
 
 class OutboxCorruptError(sqlite3.DatabaseError):
     """Raised when the outbox fails its integrity check."""
-
-
-class OutboxSchemaError(sqlite3.DatabaseError):
-    """Raised when the outbox file has an incompatible schema version."""
 
 
 class Outbox:
@@ -105,22 +97,18 @@ class Outbox:
     # ------------------------------------------------------------------ lifecycle
 
     def open(self) -> None:
-        """Open (creating if needed) the database; set it aside if corrupt or incompatible."""
+        """Open (creating if needed) the database; set it aside if corrupt."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
             try:
                 self._conn = self._connect()
             except sqlite3.DatabaseError as exc:
-                if isinstance(exc, OutboxSchemaError):
-                    label = "old-schema"
-                elif _is_corruption(exc):
-                    label = "corrupt"
-                else:
+                if not _is_corruption(exc):
                     raise
                 log.error(
-                    "Outbox %s unusable (%s); setting it aside, starting fresh", self._path, exc
+                    "Outbox %s is corrupt (%s); quarantining and starting fresh", self._path, exc
                 )
-                self._quarantine(label)
+                self._quarantine()
                 self._conn = self._connect()
         log.info("Outbox opened at %s (%d readings pending)", self._path, self.count())
 
@@ -145,7 +133,7 @@ class Outbox:
                     (r.source, encode_values(r.values), ts, quality, self._clock.boot_id, r.boot_ts)
                 )
                 if r.seen is not None:
-                    seen[r.seen.sensor] = r.seen.t_s
+                    seen[r.seen.sensor] = r.seen.uptime_s
             if not rows:
                 return 0
 
@@ -158,8 +146,8 @@ class Outbox:
                         rows,
                     )
                     conn.executemany(
-                        "INSERT INTO mqboard_last_seen (sensor, t_s) VALUES (?, ?) "
-                        "ON CONFLICT (sensor) DO UPDATE SET t_s = excluded.t_s",
+                        "INSERT INTO mqboard_last_seen (sensor, uptime_s) VALUES (?, ?) "
+                        "ON CONFLICT (sensor) DO UPDATE SET uptime_s = excluded.uptime_s",
                         seen.items(),
                     )
 
@@ -167,10 +155,10 @@ class Outbox:
             return len(rows)
 
     def load_mqboard_last_seen(self) -> dict[str, int]:
-        """``{sensor: t_s}`` of the last recorded reading per MQ board sensor."""
+        """``{sensor: uptime_s}`` of the last recorded reading per MQ board sensor."""
         with self._lock:
             cursor = self._guarded(
-                lambda conn: conn.execute("SELECT sensor, t_s FROM mqboard_last_seen")
+                lambda conn: conn.execute("SELECT sensor, uptime_s FROM mqboard_last_seen")
             )
             return dict(cursor.fetchall())
 
@@ -270,7 +258,7 @@ class Outbox:
             if _is_corruption(exc):
                 log.error("Outbox corruption detected (%s); quarantining and reopening", exc)
                 self._conn.close()
-                self._quarantine("corrupt")
+                self._quarantine()
                 self._conn = self._connect()
             raise
 
@@ -282,28 +270,20 @@ class Outbox:
             result = conn.execute("PRAGMA quick_check").fetchone()[0]
             if result != "ok":
                 raise OutboxCorruptError(f"quick_check failed: {result}")
-
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-            has_table = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outbox'"
-            ).fetchone()
-            if has_table and version != SCHEMA_VERSION:
-                raise OutboxSchemaError(f"schema version {version}, expected {SCHEMA_VERSION}")
             for statement in _SCHEMA:
                 conn.execute(statement)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             conn.commit()
         except Exception:
             conn.close()
             raise
         return conn
 
-    def _quarantine(self, label: str) -> None:
+    def _quarantine(self) -> None:
         stamp = time.strftime("%Y%m%dT%H%M%S")
         for suffix in ("", "-wal", "-shm"):
             src = self._path.with_name(self._path.name + suffix)
             if src.exists():
-                dest = src.with_name(f"{src.name}.{label}-{stamp}")
+                dest = src.with_name(f"{src.name}.corrupt-{stamp}")
                 src.replace(dest)
                 log.warning("Moved %s -> %s", src, dest)
 

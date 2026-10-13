@@ -21,7 +21,7 @@ class SeenMarker(NamedTuple):
     """
 
     sensor: str
-    t_s: int
+    uptime_s: int
 
 
 @dataclass(frozen=True, slots=True)
