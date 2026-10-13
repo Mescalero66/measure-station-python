@@ -8,11 +8,13 @@ import os
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
-from measure_station.clock import ClockState
+from measure_station.clock import ClockState, boot_clock
 from measure_station.models import Reading
 from measure_station.storage import Outbox
 from measure_station.supervisor import Heartbeat, Supervisor
+from measure_station.uart import MqBoardDecoder
 
 
 async def report_health(
@@ -20,6 +22,7 @@ async def report_health(
     outbox: Outbox,
     supervisor: Supervisor,
     clock: ClockState,
+    mqboard: MqBoardDecoder | None,
     *,
     source: str,
     interval_s: float,
@@ -29,7 +32,7 @@ async def report_health(
     started = time.monotonic()
     while True:
         heartbeat.beat()
-        values: dict[str, float | int | bool] = {
+        values: dict[str, Any] = {
             "uptime_s": round(time.monotonic() - started),
             "outbox_backlog": await asyncio.to_thread(outbox.count),
             "queue_depth": queue.qsize(),
@@ -38,6 +41,9 @@ async def report_health(
             "awaiting_time_sync": await asyncio.to_thread(outbox.count_awaiting_time),
         }
         values.update(await asyncio.to_thread(system_stats, data_dir))
+        if mqboard is not None:
+            for key, value in mqboard.status(boot_clock()).items():
+                values[f"mqboard_{key}"] = value
         await queue.put(Reading(source=source, values=values))
         await asyncio.sleep(interval_s)
 

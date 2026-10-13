@@ -1,6 +1,6 @@
-"""UART links to external microcontrollers."""
+"""The MQ gas sensor board, connected to the Pi's GPIO UART."""
 
-from measure_station.uart.link import LineBuffer, UartConfig, read_uart
-from measure_station.uart.parsers import PARSERS, ParseError
+from measure_station.uart.link import LineBuffer, read_mqboard
+from measure_station.uart.mq_board import MqBoardDecoder, ParseError, Received
 
-__all__ = ["PARSERS", "LineBuffer", "ParseError", "UartConfig", "read_uart"]
+__all__ = ["LineBuffer", "MqBoardDecoder", "ParseError", "Received", "read_mqboard"]

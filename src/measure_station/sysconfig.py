@@ -138,11 +138,11 @@ TIME_SYNC_MAX_HOLD_S: float = 24 * 3600
 # --------------------------------------------------------------------------- #
 # Concurrency and self-recovery
 # --------------------------------------------------------------------------- #
-# Worker threads for blocking I/O (sensor reads, serial reads, SQLite). Each enabled
-# UART link permanently occupies one worker, so keep this >= len(UART_LINKS) + 4.
+# Worker threads for blocking I/O (sensor reads, serial reads, SQLite). The MQ board
+# reader permanently occupies one worker, so keep this >= 5.
 THREAD_POOL_WORKERS: int = 8
 
-# A crashed task (sensor, UART link, publisher...) is restarted with exponential backoff.
+# A crashed task (sensor, MQ board reader, publisher...) is restarted with exponential backoff.
 TASK_RESTART_MIN_S: float = 1.0
 TASK_RESTART_MAX_S: float = 60.0
 # If a task ran at least this long before failing, its backoff resets to the minimum.
@@ -201,23 +201,27 @@ SENSORS: list[dict[str, Any]] = [
 ]
 
 # --------------------------------------------------------------------------- #
-# UART links to external microcontrollers
+# MQ gas sensor board (UART)
 # --------------------------------------------------------------------------- #
-# Each link reads newline-terminated messages. Protocols:
-#   "json": one JSON object per line, e.g.  {"temp_c": 21.4, "rh_pct": 40.1}
-#   "kv":   comma-separated key=value pairs, e.g.  temp_c=21.4,rh_pct=40.1
-# Prefer stable device paths: /dev/serial0 for the GPIO UART, or
-# /dev/serial/by-id/... for USB adapters (survives re-plugging and re-enumeration).
-UART_LINKS: list[dict[str, Any]] = [
-    {
-        "name": "mcu1",
-        "port": "/dev/serial0",
-        "baudrate": 115200,
-        "protocol": "json",
-        "enabled": False,
-    },
-]
+# The board broadcasts $PMQB sentences on its UART TX, wired to the Pi's GPIO UART
+# RX (GPIO15, pin 10) plus ground. Framing is fixed by the board's spec (8N1).
+MQBOARD_ENABLED: bool = True
+MQBOARD_PORT: str = "/dev/serial0"
+MQBOARD_BAUDRATE: int = 115200
 
-# Malformed UART lines are counted and summarised at most once per interval, so a
-# baud-rate mismatch can't flood the journal and wear out the SD card.
-UART_MALFORMED_LOG_INTERVAL_S: float = 60.0
+# One MQTT source per sensor: <prefix><sensor>, e.g. mqboard-mq4, mqboard-mq135.
+MQBOARD_SOURCE_PREFIX: str = "mqboard-"
+
+# Warn when a sensor's reading hasn't changed for this long (the board reads each
+# sensor every 150 s), or when no valid sentence has arrived for this long.
+MQBOARD_STALE_SENSOR_S: float = 300.0
+MQBOARD_LINK_DOWN_S: float = 30.0
+
+# Readings already on the line when the station starts can be up to 150 s old, so
+# they're held until the board's boot time can be estimated (normally within ~25 s).
+# After this long they're sent anyway, timestamped on arrival ("ts_basis": "receipt").
+MQBOARD_MAX_HOLD_S: float = 300.0
+
+# Corrupt lines are counted and summarised at most once per interval, so a wiring or
+# baud-rate problem can't flood the journal and wear out the SD card.
+MQBOARD_CORRUPT_LOG_INTERVAL_S: float = 60.0

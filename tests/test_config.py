@@ -46,3 +46,17 @@ def test_stale_threshold_must_exceed_backoff() -> None:
 
 def test_topic_unsafe_station_id_rejected() -> None:
     assert validate_config(_config(STATION_ID="bad/id"))
+
+
+def test_mqboard_sources_must_not_collide_with_sensors() -> None:
+    cfg = _config(
+        STATION_ID="pi-01",
+        MQBOARD_ENABLED=True,
+        SENSORS=[{"type": "simulated", "name": "mqboard-mq2", "interval_s": 1}],
+    )
+    assert any("duplicate source name 'mqboard-mq2'" in e for e in validate_config(cfg))
+
+
+def test_mqboard_prefix_must_be_topic_safe() -> None:
+    cfg = _config(STATION_ID="pi-01", MQBOARD_ENABLED=True, MQBOARD_SOURCE_PREFIX="mq/board-")
+    assert any("must match" in e for e in validate_config(cfg))

@@ -1,7 +1,7 @@
 # Measure Station
 
 An always-on environmental measurement station for the Raspberry Pi 2B. It polls
-sensors and reads data from external microcontrollers over UART, then publishes
+sensors and reads an MQ gas sensor board over the Pi's UART, then publishes
 everything as MQTT messages to an external broker over Ethernet.
 
 It is built to run unattended:
@@ -10,19 +10,19 @@ It is built to run unattended:
   outbox first, and removed only after the broker acknowledges it.
 - **Self-recovering.** Crashed tasks restart on their own. Hung tasks trigger a
   service restart, and a hung OS triggers a hardware reboot.
-- **Concurrent.** Each sensor, UART link and the publisher run independently.
+- **Concurrent.** Each sensor, the MQ board reader and the publisher run independently.
 
 ## Architecture
 
 ```
  sensors (I2C, sysfs...) ─┐                                       ┌─> MQTT broker
- UART links (MCUs) ───────┼─> asyncio.Queue ─> recorder ─> SQLite ─> publisher
+ MQ gas board (UART) ─────┼─> asyncio.Queue ─> recorder ─> SQLite ─> publisher
  health self-report ──────┘     (memory)     (groups writes) outbox (deletes only on PUBACK)
 ```
 
 | Layer | Mechanism | Recovers from |
 |---|---|---|
-| Task | `Supervisor` restarts a crashed task with exponential backoff | Sensor unplugged, I2C glitch, USB-serial adapter re-plugged |
+| Task | `Supervisor` restarts a crashed task with exponential backoff | Sensor unplugged, I2C glitch, serial port error |
 | Link | Publisher reconnects with backoff; data waits in the outbox | Ethernet down, broker restart |
 | Process | Tasks send heartbeats; systemd `WatchdogSec` restarts the service if any task hangs | Deadlocked hardware read, frozen event loop |
 | OS | systemd keeps the BCM2835 hardware watchdog alive (`RuntimeWatchdogSec`) | Kernel or systemd hang, which triggers a reboot |
@@ -60,7 +60,7 @@ stalls the rest of the station.
 │   ├── watchdog.py                 # systemd sd_notify / watchdog
 │   ├── health.py                   # periodic station self-report
 │   ├── sensors/                    # sensor drivers + registry
-│   └── uart/                       # serial reader + line protocols
+│   └── uart/                       # MQ gas board: serial reader + $PMQB decoder
 └── tests/
 ```
 
@@ -342,16 +342,73 @@ above right covers most of the same risk with configuration alone.
 3. Add an entry to `SENSORS` in `sysconfig.py`, e.g.
    `{"type": "my_sensor", "name": "light", "interval_s": 10, "pin": 4}`.
 
-## UART protocol
+## MQ gas board
 
-Microcontrollers send one newline-terminated message per reading. There are two formats:
+The MQ board (six MQ gas sensors on an ESP32-S3) broadcasts NMEA-style `$PMQB` sentences,
+as specified in the board's `INTERFACE.md`. It re-sends the latest reading of every
+sensor about every 10 s and reads each sensor every 150 s, so most sentences are repeats.
 
-- `json`: `{"temp_c": 21.4, "rh_pct": 40.1}`
-- `kv`: `temp_c=21.4,rh_pct=40.1`
+**Wiring**
+- Board TX → Pi RX (GPIO15, pin 10).
+- Common ground.
+- Both sides use 3.3 V logic, so no level shifter is needed.
+- The board only transmits, so Pi TX is unused.
+- The station reads it on `/dev/serial0` at 115200 8N1 (`MQBOARD_*` in `sysconfig.py`).
+  The installer enables the UART and turns off the serial login console that would
+  otherwise use it.
 
-Each link publishes under its configured `name`. Malformed or overlong lines are
-discarded and reported in a summary at most once per minute. For USB-serial adapters,
-use the stable `/dev/serial/by-id/...` path rather than `/dev/ttyUSB0`.
+**What gets published**
+One MQTT source per sensor: `<MQBOARD_SOURCE_PREFIX><sensor>`, e.g.
+`measure-station/pi-01/mqboard-mq4`. Each new reading is sent once:
+
+```json
+{"station": "pi-01", "source": "mqboard-mq4", "ts": "2026-10-13T09:40:01.000+00:00",
+ "ts_quality": "ntp",
+ "values": {"gas": "CH4", "ppm": 17.85, "temp_c": 23.19, "tracking": true,
+            "r0": 5.401877, "board_t_s": 86451, "ts_basis": "board"}}
+```
+
+- **Fields are as the board sent them.** Empty fields become `null` (never 0).
+  `nan`/`inf` also become `null`.
+- **Read faults are published.** A failed read (new `board_t_s`, `ppm: null`) is sent,
+  not dropped, so consumers can see sensor faults.
+- **The station doesn't interpret the data.** Deciding whether a `tracking: false`
+  reading is provisional, or whether `r0` = 10.0 is a placeholder, is left to consumers.
+  So is recomputing ppm against another R0.
+- **De-duplication key.** `board_t_s` identifies the reading, so consumers can
+  de-duplicate on `(source, board_t_s)` within one board boot.
+
+**How readings are handled**
+
+- **Repeats** are dropped in memory and never written to the SD card. Only new readings
+  are stored: 6 per 150 s.
+- **Station restarts.** The last `t_s` recorded per sensor is saved in the outbox, in
+  the same transaction as the reading itself. After a station restart, readings already
+  recorded aren't sent again. If the station dies with readings still in memory, the
+  board is still repeating them, so they're picked up again on restart (if it's back
+  within about 150 s).
+- **Board restarts** are detected when a sensor's `t_s` goes backwards, or when its
+  sentence turns empty.
+- **Timestamps.** The board has no clock; `t_s` is its uptime. The station estimates
+  when the board booted, as the minimum of `arrival time − t_s` over the last hour of
+  newly seen readings, and timestamps each reading as `board boot + t_s`. That's within
+  about a second of when the reading was actually taken. These timestamps then go
+  through the station's own clock-sync correction like any other reading.
+- **Held readings.** A reading already on the line when the station starts can be up
+  to 150 s old. It's held until a reading is seen arriving fresh (within about 25 s),
+  then sent with its true capture time. If no estimate arrives within `max_hold_s`, it's
+  sent anyway, timestamped on arrival, with `ts_basis: "receipt"`.
+- **Corrupt lines** (bad checksum, framing or field) are discarded. The board repeats
+  every reading, so nothing is lost. They're counted, and summarised in the log at most
+  once per minute.
+
+**Health and alerts**
+- The health topic includes `mqboard_up`, `mqboard_stale_sensors`,
+  `mqboard_bad_lines`, `mqboard_last_line_age_s` and `mqboard_held`.
+- The log warns if no valid sentence arrives for 30 s, if a sensor's reading stops
+  changing for 300 s, and when a board restart is detected.
+
+**Settings:** `MQBOARD_*` in `sysconfig.py`. Defaults follow the board's spec.
 
 ## Development
 
@@ -365,6 +422,10 @@ python -m venv .venv
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/python -m measure_station   # data goes to ./data when not under systemd
 ```
+
+To test without the MQ board, set `MQBOARD_PORT` to a pyserial URL such as
+`socket://127.0.0.1:7777`, and serve simulated `$PMQB` sentences from that TCP port.
+Or set `MQBOARD_ENABLED = False`.
 
 Always run the station with `python -m measure_station`, never by file path. Running
 a file inside the package would put that directory on `sys.path`, and then

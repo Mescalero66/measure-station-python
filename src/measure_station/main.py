@@ -29,7 +29,7 @@ from measure_station.sensors import create_sensor, poll_sensor
 from measure_station.storage import Outbox
 from measure_station.supervisor import Supervisor
 from measure_station.timesync import monitor_clock_sync
-from measure_station.uart import UartConfig, read_uart
+from measure_station.uart import MqBoardDecoder, read_mqboard
 from measure_station.watchdog import SystemdNotifier, run_watchdog, watchdog_interval_s
 
 log = logging.getLogger("measure_station")
@@ -95,7 +95,12 @@ async def run(cfg: ModuleType) -> None:
     queue: asyncio.Queue[Reading] = asyncio.Queue(maxsize=cfg.READING_QUEUE_MAXSIZE)
     new_data = asyncio.Event()
     encoder = MessageEncoder(cfg.MQTT_BASE_TOPIC, cfg.STATION_ID)
-    supervisor = build_supervisor(cfg, clock, queue, outbox, encoder, new_data)
+    # The decoder lives for the whole run (across serial re-opens), seeded with what the
+    # outbox already recorded, so the board's repeated readings aren't recorded twice.
+    mqboard = None
+    if cfg.MQBOARD_ENABLED:
+        mqboard = _mqboard_decoder(cfg, await asyncio.to_thread(outbox.load_mqboard_last_seen))
+    supervisor = build_supervisor(cfg, clock, queue, outbox, encoder, new_data, mqboard)
     notifier = SystemdNotifier()
 
     try:
@@ -130,6 +135,7 @@ def build_supervisor(
     outbox: Outbox,
     encoder: MessageEncoder,
     new_data: asyncio.Event,
+    mqboard: MqBoardDecoder | None,
 ) -> Supervisor:
     supervisor = Supervisor(
         restart_min_s=cfg.TASK_RESTART_MIN_S,
@@ -173,15 +179,16 @@ def build_supervisor(
             stale_after_s=max(stale_s, 2 * sensor.interval_s + cfg.SENSOR_READ_TIMEOUT_S),
         )
 
-    for link_cfg in _enabled(cfg.UART_LINKS):
-        uart = _uart_config(link_cfg)
+    if mqboard is not None:
         supervisor.add(
-            f"uart:{uart.name}",
+            "mqboard",
             functools.partial(
-                read_uart,
-                uart,
+                read_mqboard,
+                mqboard,
                 queue,
-                malformed_log_interval_s=cfg.UART_MALFORMED_LOG_INTERVAL_S,
+                port=cfg.MQBOARD_PORT,
+                baudrate=cfg.MQBOARD_BAUDRATE,
+                malformed_log_interval_s=cfg.MQBOARD_CORRUPT_LOG_INTERVAL_S,
             ),
             stale_after_s=stale_s,
         )
@@ -194,6 +201,7 @@ def build_supervisor(
             outbox,
             supervisor,
             clock,
+            mqboard,
             source=cfg.HEALTH_SOURCE_NAME,
             interval_s=cfg.HEALTH_INTERVAL_S,
             data_dir=cfg.DATA_DIR,
@@ -230,12 +238,8 @@ def validate_config(cfg: Any) -> list[str]:
             sources.append(create_sensor(entry).name)
         except (TypeError, ValueError) as exc:
             errors.append(f"SENSORS entry {entry!r}: {exc}")
-    uart_links = list(_enabled(cfg.UART_LINKS))
-    for entry in uart_links:
-        try:
-            sources.append(_uart_config(entry).name)
-        except (TypeError, ValueError) as exc:
-            errors.append(f"UART_LINKS entry {entry!r}: {exc}")
+    if cfg.MQBOARD_ENABLED:
+        sources.extend(_mqboard_decoder(cfg, {}).sources())
 
     seen: set[str] = set()
     for name in sources:
@@ -255,11 +259,9 @@ def validate_config(cfg: Any) -> list[str]:
             f"TASK_STALE_AFTER_S ({cfg.TASK_STALE_AFTER_S}) must exceed TASK_RESTART_MAX_S, "
             f"MQTT_RECONNECT_MAX_S, MQTT_IDLE_POLL_S and TIME_SYNC_POLL_S ({longest_wait})"
         )
-    if len(uart_links) + 4 > cfg.THREAD_POOL_WORKERS:
-        errors.append(
-            f"THREAD_POOL_WORKERS ({cfg.THREAD_POOL_WORKERS}) must be at least "
-            f"len(UART_LINKS) + 4 = {len(uart_links) + 4}"
-        )
+    min_workers = 5 if cfg.MQBOARD_ENABLED else 4  # the board reader holds one permanently
+    if min_workers > cfg.THREAD_POOL_WORKERS:
+        errors.append(f"THREAD_POOL_WORKERS ({cfg.THREAD_POOL_WORKERS}) must be >= {min_workers}")
     return errors
 
 
@@ -267,8 +269,14 @@ def _enabled(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in entries if e.get("enabled", True)]
 
 
-def _uart_config(entry: dict[str, Any]) -> UartConfig:
-    return UartConfig(**{k: v for k, v in entry.items() if k != "enabled"})
+def _mqboard_decoder(cfg: Any, last_seen: dict[str, int]) -> MqBoardDecoder:
+    return MqBoardDecoder(
+        last_seen=last_seen,
+        source_prefix=cfg.MQBOARD_SOURCE_PREFIX,
+        max_hold_s=cfg.MQBOARD_MAX_HOLD_S,
+        stale_sensor_s=cfg.MQBOARD_STALE_SENSOR_S,
+        link_down_s=cfg.MQBOARD_LINK_DOWN_S,
+    )
 
 
 def _mqtt_settings(cfg: ModuleType, encoder: MessageEncoder) -> MqttSettings:

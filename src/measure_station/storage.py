@@ -29,8 +29,9 @@ log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
-# Bump when the table layout changes; an outbox with another version is set aside.
-SCHEMA_VERSION = 2
+# Bump when the table layout changes. An outbox file with a different version is set
+# aside (renamed, not deleted) and a fresh one started, rather than crash-looping.
+SCHEMA_VERSION = 1
 
 # No AUTOINCREMENT: it writes an extra page (sqlite_sequence) on every insert, ~1/3 of
 # all outbox writes. A plain rowid is always max(id)+1, so new rows still sort after
@@ -51,6 +52,13 @@ _SCHEMA = (
     """
     CREATE INDEX IF NOT EXISTS outbox_awaiting_time
         ON outbox (boot_id) WHERE ts_quality = 'pending'
+    """,
+    # t_s of the last recorded reading per MQ board sensor (see SeenMarker).
+    """
+    CREATE TABLE IF NOT EXISTS mqboard_last_seen (
+        sensor TEXT    PRIMARY KEY,
+        t_s    INTEGER NOT NULL
+    ) WITHOUT ROWID
     """,
 )
 
@@ -125,22 +133,46 @@ class Outbox:
     # ------------------------------------------------------------------ operations
 
     def add_many(self, readings: Iterable[Reading]) -> int:
+        """Store readings, and their :class:`SeenMarker`s, in one transaction."""
         with self._lock:
             # Resolve timestamps under the lock, so this can't interleave with
             # apply_time_correction and leave a pre-sync reading uncorrected.
             rows = []
+            seen: dict[str, int] = {}  # latest marker per sensor wins
             for r in readings:
                 ts, quality = self._clock.resolve(r.timestamp, r.boot_ts)
                 rows.append(
                     (r.source, encode_values(r.values), ts, quality, self._clock.boot_id, r.boot_ts)
                 )
-            if rows:
-                self._execute_many(
-                    "INSERT INTO outbox (source, values_json, ts, ts_quality, boot_id, boot_ts) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
+                if r.seen is not None:
+                    seen[r.seen.sensor] = r.seen.t_s
+            if not rows:
+                return 0
+
+            def _insert(conn: sqlite3.Connection) -> None:
+                with conn:
+                    conn.executemany(
+                        "INSERT INTO outbox "
+                        "(source, values_json, ts, ts_quality, boot_id, boot_ts) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        rows,
+                    )
+                    conn.executemany(
+                        "INSERT INTO mqboard_last_seen (sensor, t_s) VALUES (?, ?) "
+                        "ON CONFLICT (sensor) DO UPDATE SET t_s = excluded.t_s",
+                        seen.items(),
+                    )
+
+            self._guarded(_insert)
             return len(rows)
+
+    def load_mqboard_last_seen(self) -> dict[str, int]:
+        """``{sensor: t_s}`` of the last recorded reading per MQ board sensor."""
+        with self._lock:
+            cursor = self._guarded(
+                lambda conn: conn.execute("SELECT sensor, t_s FROM mqboard_last_seen")
+            )
+            return dict(cursor.fetchall())
 
     def fetch_batch(self, limit: int) -> list[StoredReading]:
         """Return up to ``limit`` of the oldest *publishable* readings (not removed).
@@ -257,10 +289,10 @@ class Outbox:
             ).fetchone()
             if has_table and version != SCHEMA_VERSION:
                 raise OutboxSchemaError(f"schema version {version}, expected {SCHEMA_VERSION}")
-            with conn:
-                for statement in _SCHEMA:
-                    conn.execute(statement)
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            for statement in _SCHEMA:
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            conn.commit()
         except Exception:
             conn.close()
             raise

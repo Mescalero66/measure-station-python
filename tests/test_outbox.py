@@ -5,6 +5,7 @@ import pytest
 
 from conftest import FakeTime, make_outbox
 from measure_station.clock import ClockState
+from measure_station.models import Reading, SeenMarker
 from measure_station.storage import SCHEMA_VERSION, Outbox
 
 
@@ -103,3 +104,42 @@ def test_rejects_invalid_synchronous_mode(tmp_path: Path, synced_clock: ClockSta
             max_time_hold_s=0,
             synchronous="SOMETIMES",
         )
+
+
+def test_seen_markers_saved_with_readings(
+    tmp_path: Path, synced_clock: ClockState, fake_time: FakeTime
+) -> None:
+    path = tmp_path / "outbox.sqlite3"
+    box = make_outbox(path, synced_clock)
+    box.add_many(
+        [
+            Reading(
+                "mqboard-mq2",
+                {"ppm": 1},
+                fake_time.wall,
+                fake_time.boot,
+                SeenMarker("MQ2", 26),
+            ),
+            Reading(
+                "mqboard-mq2",
+                {"ppm": 2},
+                fake_time.wall,
+                fake_time.boot,
+                SeenMarker("MQ2", 176),
+            ),
+            Reading(
+                "mqboard-mq4",
+                {"ppm": 3},
+                fake_time.wall,
+                fake_time.boot,
+                SeenMarker("MQ4", 51),
+            ),
+            Reading("cpu", {"t": 40}, fake_time.wall, fake_time.boot),
+        ]
+    )
+    box.close()
+
+    reopened = make_outbox(path, synced_clock)
+    assert reopened.load_mqboard_last_seen() == {"MQ2": 176, "MQ4": 51}
+    assert reopened.count() == 4
+    reopened.close()

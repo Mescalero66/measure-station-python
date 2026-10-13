@@ -13,6 +13,17 @@ from typing import Any, NamedTuple
 from measure_station.clock import TimeQuality, boot_clock
 
 
+class SeenMarker(NamedTuple):
+    """Identity of an MQ board reading, which the board repeats ~15 times.
+
+    Stored in the outbox in the same transaction as the reading, so after a restart
+    the decoder knows which repeated readings have already been recorded.
+    """
+
+    sensor: str
+    t_s: int
+
+
 @dataclass(frozen=True, slots=True)
 class Reading:
     """A set of values captured from one source at one instant.
@@ -26,6 +37,7 @@ class Reading:
     values: Mapping[str, Any]
     timestamp: float = field(default_factory=time.time)
     boot_ts: float = field(default_factory=boot_clock)
+    seen: SeenMarker | None = None
 
 
 class StoredReading(NamedTuple):

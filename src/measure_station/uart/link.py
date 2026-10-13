@@ -1,41 +1,23 @@
-"""UART reader task for one external microcontroller link."""
+"""Serial reader task for the MQ gas board on the Pi's GPIO UART."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import time
 
 import serial
 
+from measure_station.clock import boot_clock
 from measure_station.models import Reading
 from measure_station.supervisor import Heartbeat
-from measure_station.uart.parsers import PARSERS, ParseError
+from measure_station.uart.mq_board import MqBoardDecoder, ParseError, Received
 
 log = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True, slots=True)
-class UartConfig:
-    """One ``sysconfig.UART_LINKS`` entry."""
-
-    name: str
-    port: str
-    baudrate: int = 115200
-    protocol: str = "json"
-    bytesize: int = 8
-    parity: str = "N"
-    stopbits: float = 1
-    read_timeout_s: float = 1.0
-    max_line_bytes: int = 1024
-    encoding: str = "utf-8"
-
-    def __post_init__(self) -> None:
-        if self.protocol not in PARSERS:
-            raise ValueError(
-                f"UART link {self.name!r}: unknown protocol {self.protocol!r}; "
-                f"expected one of {sorted(PARSERS)}"
-            )
+# Fixed by the board's interface spec: 8N1, lines of at most 128 bytes.
+MAX_LINE_BYTES = 128
+READ_TIMEOUT_S = 1.0  # also how often the decoder's housekeeping runs when the line is idle
 
 
 class LineBuffer:
@@ -71,50 +53,57 @@ class LineBuffer:
         return lines
 
 
-async def read_uart(
-    config: UartConfig,
+async def read_mqboard(
+    decoder: MqBoardDecoder,
     queue: asyncio.Queue[Reading],
     *,
+    port: str,
+    baudrate: int,
     malformed_log_interval_s: float,
     heartbeat: Heartbeat,
 ) -> None:
-    """Read and parse lines from a serial port until cancelled or the port fails.
+    """Read and decode the board's sentences until cancelled or the port fails.
 
-    If the device disappears (e.g. a USB adapter is unplugged) the read raises,
-    and the supervisor re-opens the port with backoff until it returns.
+    If the port fails, the read raises and the supervisor re-opens it with backoff.
+    ``decoder`` outlives this task, so its state survives the re-open.
     """
     loop = asyncio.get_running_loop()
-    parse = PARSERS[config.protocol]
-    port = await asyncio.to_thread(_open_port, config)
-    log.info("UART link %r open on %s @ %d baud", config.name, config.port, config.baudrate)
+    serial_port = await asyncio.to_thread(_open_port, port, baudrate)
+    log.info("MQ board: reading %s at %d baud", port, baudrate)
 
-    buffer = LineBuffer(config.max_line_bytes)
+    buffer = LineBuffer(MAX_LINE_BYTES)
     malformed = 0
     latest_problem = ""
     last_report = loop.time()
     try:
         while True:
             heartbeat.beat()
-            # Returns at a newline, after max_line_bytes, or on read timeout (possibly
-            # with a partial line, which LineBuffer holds until the rest arrives).
-            chunk = await asyncio.to_thread(port.read_until, b"\n", config.max_line_bytes)
+            # Returns at a newline, after MAX_LINE_BYTES, or on timeout (possibly with a
+            # partial line, which LineBuffer holds until the rest arrives).
+            chunk = await asyncio.to_thread(serial_port.read_until, b"\n", MAX_LINE_BYTES)
+            received = Received(boot_ts=boot_clock(), wall_ts=time.time())
             for raw in buffer.feed(chunk):
                 try:
-                    values = parse(raw.decode(config.encoding))
-                except (UnicodeDecodeError, ParseError) as exc:
+                    readings = decoder.feed(raw, received)
+                except ParseError as exc:
+                    decoder.bad_lines += 1
                     malformed += 1
                     latest_problem = f"{raw[:80]!r}: {exc}"
                     continue
-                await queue.put(Reading(source=config.name, values=values))
+                for reading in readings:
+                    await queue.put(reading)
+            # Runs at least once per read timeout, even when the line is silent.
+            for reading in decoder.check(received.boot_ts):
+                await queue.put(reading)
 
             if buffer.overflows:
+                decoder.bad_lines += buffer.overflows
                 malformed += buffer.overflows
-                latest_problem = f"line exceeded {config.max_line_bytes} bytes"
+                latest_problem = f"line exceeded {MAX_LINE_BYTES} bytes"
                 buffer.overflows = 0
             if malformed and loop.time() - last_report >= malformed_log_interval_s:
                 log.warning(
-                    "UART link %r: discarded %d malformed line(s) in the last %.0f s (latest %s)",
-                    config.name,
+                    "MQ board: discarded %d corrupt line(s) in the last %.0f s (latest %s)",
                     malformed,
                     loop.time() - last_report,
                     latest_problem,
@@ -122,18 +111,20 @@ async def read_uart(
                 malformed = 0
                 last_report = loop.time()
     finally:
-        port.close()
+        serial_port.close()
 
 
-def _open_port(config: UartConfig) -> serial.Serial:
-    port = serial.Serial(
-        port=config.port,
-        baudrate=config.baudrate,
-        bytesize=config.bytesize,
-        parity=config.parity,
-        stopbits=config.stopbits,
-        timeout=config.read_timeout_s,
+def _open_port(port: str, baudrate: int) -> serial.SerialBase:
+    # serial_for_url() takes a device path as-is, and also socket://host:port, which
+    # lets the station be tested against a simulated board without hardware.
+    serial_port = serial.serial_for_url(
+        port,
+        baudrate=baudrate,
+        bytesize=serial.EIGHTBITS,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        timeout=READ_TIMEOUT_S,
         exclusive=True,  # refuse to share the port with another process (POSIX)
     )
-    port.reset_input_buffer()  # drop any stale partial line from before we opened
-    return port
+    serial_port.reset_input_buffer()  # drop any stale partial line from before we opened
+    return serial_port
