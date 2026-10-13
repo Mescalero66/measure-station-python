@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from measure_station.models import MessageEncoder, Reading
+from measure_station.models import Reading
 from measure_station.storage import Outbox
 from measure_station.supervisor import Heartbeat
 
@@ -15,7 +15,6 @@ log = logging.getLogger(__name__)
 async def record_readings(
     queue: asyncio.Queue[Reading],
     outbox: Outbox,
-    encoder: MessageEncoder,
     new_data: asyncio.Event,
     *,
     flush_interval_s: float,
@@ -58,12 +57,12 @@ async def record_readings(
                         break
 
             if pending and (len(pending) >= batch_size or loop.time() >= flush_due):
-                messages = [encoder.encode(r) for r in pending]
+                group = list(pending)
                 # Clear before writing: if we're cancelled mid-write, the worker thread
                 # still commits these, so the shutdown flush must not write them again.
                 pending.clear()
                 flush_due = None
-                await asyncio.to_thread(outbox.add_many, messages)
+                await asyncio.to_thread(outbox.add_many, group)
                 new_data.set()
 
             if loop.time() >= next_prune:
@@ -72,14 +71,13 @@ async def record_readings(
                     log.warning("Outbox at capacity: discarded %d oldest message(s)", dropped)
                 next_prune = loop.time() + prune_interval_s
     finally:
-        _flush_on_exit(pending, queue, outbox, encoder)
+        _flush_on_exit(pending, queue, outbox)
 
 
 def _flush_on_exit(
     pending: list[Reading],
     queue: asyncio.Queue[Reading],
     outbox: Outbox,
-    encoder: MessageEncoder,
 ) -> None:
     """On shutdown, persist the unflushed group and anything still queued."""
     while True:
@@ -90,7 +88,7 @@ def _flush_on_exit(
     if not pending:
         return
     try:
-        outbox.add_many(encoder.encode(r) for r in pending)
+        outbox.add_many(pending)
         log.info("Flushed %d pending reading(s) to the outbox", len(pending))
     except Exception:
         log.exception("Failed to flush %d pending reading(s) on shutdown", len(pending))

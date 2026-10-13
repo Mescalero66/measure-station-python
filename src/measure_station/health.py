@@ -9,6 +9,7 @@ import shutil
 import time
 from pathlib import Path
 
+from measure_station.clock import ClockState
 from measure_station.models import Reading
 from measure_station.storage import Outbox
 from measure_station.supervisor import Heartbeat, Supervisor
@@ -18,6 +19,7 @@ async def report_health(
     queue: asyncio.Queue[Reading],
     outbox: Outbox,
     supervisor: Supervisor,
+    clock: ClockState,
     *,
     source: str,
     interval_s: float,
@@ -27,11 +29,13 @@ async def report_health(
     started = time.monotonic()
     while True:
         heartbeat.beat()
-        values: dict[str, float | int] = {
+        values: dict[str, float | int | bool] = {
             "uptime_s": round(time.monotonic() - started),
             "outbox_backlog": await asyncio.to_thread(outbox.count),
             "queue_depth": queue.qsize(),
             "task_restarts": supervisor.total_restarts(),
+            "clock_synced": clock.synced,
+            "awaiting_time_sync": await asyncio.to_thread(outbox.count_awaiting_time),
         }
         values.update(await asyncio.to_thread(system_stats, data_dir))
         await queue.put(Reading(source=source, values=values))

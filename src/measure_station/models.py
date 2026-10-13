@@ -1,4 +1,4 @@
-"""Core data types: a measurement reading and its MQTT wire encoding."""
+"""Core data types: a measurement reading, its stored form, and its MQTT encoding."""
 
 from __future__ import annotations
 
@@ -10,31 +10,42 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
-from measure_station.clock import clock_is_synchronised
+from measure_station.clock import TimeQuality, boot_clock
 
 
 @dataclass(frozen=True, slots=True)
 class Reading:
-    """A set of values captured from one source at one instant."""
+    """A set of values captured from one source at one instant.
+
+    Both clocks are captured: ``timestamp`` (wall clock, may be wrong before NTP sync)
+    and ``boot_ts`` (seconds since boot, never jumps), so the timestamp can be
+    corrected later. See :mod:`measure_station.clock`.
+    """
 
     source: str
     values: Mapping[str, Any]
     timestamp: float = field(default_factory=time.time)
-    # False if the system clock had not yet been NTP-synchronised when this was taken
-    # (the Pi has no RTC, so after an offline boot timestamps may be wrong).
-    clock_synced: bool = field(default_factory=clock_is_synchronised)
+    boot_ts: float = field(default_factory=boot_clock)
 
 
-class OutboxMessage(NamedTuple):
-    """An encoded message ready to be stored and published."""
+class StoredReading(NamedTuple):
+    """A reading as held in the outbox."""
 
-    topic: str
-    payload: str
-    created_at: float
+    id: int
+    source: str
+    values_json: str
+    ts: float
+    ts_quality: str
+    boot_id: str
+    boot_ts: float
+
+
+def encode_values(values: Mapping[str, Any]) -> str:
+    return json.dumps(_json_safe(values), separators=(",", ":"), allow_nan=False, default=str)
 
 
 class MessageEncoder:
-    """Maps readings to MQTT topics and JSON payloads."""
+    """Maps stored readings to MQTT topics and JSON payloads."""
 
     def __init__(self, base_topic: str, station_id: str) -> None:
         self._station_id = station_id
@@ -47,19 +58,29 @@ class MessageEncoder:
     def topic_for(self, source: str) -> str:
         return f"{self._prefix}/{source}"
 
-    def encode(self, reading: Reading) -> OutboxMessage:
-        payload = {
+    def encode(self, reading: StoredReading) -> tuple[str, str]:
+        """Return ``(topic, payload)``."""
+        payload: dict[str, Any] = {
             "station": self._station_id,
             "source": reading.source,
-            "ts": datetime.fromtimestamp(reading.timestamp, UTC).isoformat(timespec="milliseconds"),
-            "clock_synced": reading.clock_synced,
-            "values": _json_safe(reading.values),
+            "ts": datetime.fromtimestamp(reading.ts, UTC).isoformat(timespec="milliseconds"),
+            "ts_quality": _published_quality(reading.ts_quality),
+            "values": json.loads(reading.values_json),
         }
-        return OutboxMessage(
-            topic=self.topic_for(reading.source),
-            payload=json.dumps(payload, separators=(",", ":"), allow_nan=False, default=str),
-            created_at=reading.timestamp,
+        if reading.ts_quality == TimeQuality.PENDING:
+            # Uncorrectable on the station; include what a consumer would need to fix
+            # it later from another reading of the same boot with a known time.
+            payload["boot_id"] = reading.boot_id
+            payload["boot_ts"] = round(reading.boot_ts, 3)
+        return (
+            self.topic_for(reading.source),
+            json.dumps(payload, separators=(",", ":"), allow_nan=False, default=str),
         )
+
+
+def _published_quality(stored: str) -> str:
+    # A reading released while still uncorrected carries the unsynchronised wall clock.
+    return "estimated" if stored == TimeQuality.PENDING else stored
 
 
 def _json_safe(value: Any) -> Any:

@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from measure_station.models import MessageEncoder, Reading
+from measure_station.clock import ClockState
+from measure_station.models import Reading
 from measure_station.recorder import record_readings
 from measure_station.storage import Outbox
 from measure_station.supervisor import Heartbeat
@@ -12,8 +13,8 @@ from measure_station.supervisor import Heartbeat
 class CountingOutbox(Outbox):
     """Records how many write transactions the recorder issues."""
 
-    def __init__(self, path: Path) -> None:
-        super().__init__(path, max_rows=10_000)
+    def __init__(self, path: Path, clock: ClockState) -> None:
+        super().__init__(path, clock=clock, max_rows=10_000, max_time_hold_s=0)
         self.writes = 0
 
     def add_many(self, messages):  # type: ignore[no-untyped-def]
@@ -22,8 +23,8 @@ class CountingOutbox(Outbox):
 
 
 @pytest.fixture
-def outbox(tmp_path: Path):
-    box = CountingOutbox(tmp_path / "outbox.sqlite3")
+def outbox(tmp_path: Path, synced_clock: ClockState):
+    box = CountingOutbox(tmp_path / "outbox.sqlite3", synced_clock)
     box.open()
     yield box
     box.close()
@@ -34,7 +35,6 @@ def _start(outbox: Outbox, queue: asyncio.Queue, *, flush_interval_s: float, bat
         record_readings(
             queue,
             outbox,
-            MessageEncoder("base", "pi"),
             asyncio.Event(),
             flush_interval_s=flush_interval_s,
             batch_size=batch_size,

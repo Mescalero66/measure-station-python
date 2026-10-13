@@ -50,6 +50,9 @@ stalls the rest of the station.
 │   ├── sysconfig.py                # ALL configurable settings
 │   ├── main.py                     # entry point: validates config, wires tasks
 │   ├── models.py                   # Reading, MQTT topic/payload encoding
+│   ├── clock.py                    # boot clock, NTP sync detection, timestamp correction
+│   ├── timesync.py                 # task: detects sync, back-dates held readings
+│   ├── ntp_setup.py                # applies NTP_SERVERS to timesyncd (runs as root at start)
 │   ├── storage.py                  # SQLite outbox (store-and-forward)
 │   ├── recorder.py                 # queue -> outbox task
 │   ├── publisher.py                # outbox -> MQTT task
@@ -88,9 +91,12 @@ stalls the rest of the station.
 3. **Configure.**
 
    ```bash
-   sudo nano /opt/measure-station/src/measure_station/sysconfig.py   # broker, sensors, UARTs
+   sudo nano /opt/measure-station/src/measure_station/sysconfig.py   # broker, NTP, sensors, UARTs
    sudo nano /etc/measure-station/env                                # MQTT credentials
    ```
+
+   If the station can't reach the internet, set `NTP_SERVERS` to a local time server.
+   See [Using a local NTP server](#using-a-local-ntp-server).
 
 4. **Reboot** to apply the I2C, UART and watchdog changes: `sudo reboot`.
    The service starts automatically on boot.
@@ -100,7 +106,8 @@ stalls the rest of the station.
 ```bash
 systemctl status measure-station           # is it running?
 journalctl -u measure-station -f           # follow the logs
-sudo systemctl restart measure-station     # apply sysconfig.py changes
+sudo systemctl restart measure-station     # apply sysconfig.py changes (including NTP_SERVERS)
+timedatectl timesync-status                # which NTP server is in use, and sync state
 sqlite3 /var/lib/measure-station/outbox.sqlite3 'select count(*) from outbox'   # backlog
 ```
 
@@ -136,17 +143,98 @@ with just a few slow sensors writes very little either way. Beyond the software:
 
 | Topic | Payload |
 |---|---|
-| `<base>/<station>/<source>` | `{"station", "source", "ts", "clock_synced", "values": {...}}` |
+| `<base>/<station>/<source>` | `{"station", "source", "ts", "ts_quality", "values": {...}}` |
 | `<base>/<station>/status` | `online` / `offline` (retained; `offline` is also the last-will) |
-| `<base>/<station>/health` | uptime, outbox backlog, queue depth, task restarts, load, memory, disk |
+| `<base>/<station>/health` | uptime, outbox backlog, queue depth, task restarts, clock sync, load, memory, disk |
 
 `ts` is the UTC capture time, not the send time, so buffered data keeps its true
 timestamp. Delivery is **at-least-once** (QoS 1), which means a reading can arrive twice
 around a reconnect. Consumers should de-duplicate on `(station, source, ts)`.
 
-`clock_synced` is `false` for readings taken before NTP has synchronised since boot.
-The Pi has no real-time clock, so after an offline boot its time can be wrong. If
-accurate timestamps during long outages matter, add an RTC module (e.g. DS3231).
+`ts_quality` says how far `ts` can be trusted (see [Timestamps without a real-time
+clock](#timestamps-without-a-real-time-clock)):
+
+| `ts_quality` | Meaning | Accuracy |
+|---|---|---|
+| `ntp` | Captured while the clock was NTP-synchronised | NTP accuracy |
+| `corrected` | Captured before sync and back-dated once sync was reached | Within seconds over a day offline (crystal drift) |
+| `estimated` | Could not be corrected; `ts` is the unsynchronised system clock | Unreliable. The payload also carries `boot_id` and `boot_ts` |
+
+## Timestamps without a real-time clock
+
+The Pi has no battery-backed clock. After a boot without NTP, the system clock resumes
+from roughly the last shutdown time and then jumps when NTP syncs. To keep timestamps
+accurate anyway:
+
+1. **Every reading records two clocks:** the wall clock, and the *boot clock*
+   (`CLOCK_BOOTTIME`, seconds since boot). NTP never changes the boot clock.
+2. **Until NTP sync is detected**, readings are stored in the outbox as `pending`, tagged
+   with the kernel's `boot_id`, and are **not published**.
+3. **When sync is detected**, the station computes `offset = wall clock − boot clock`.
+   One `UPDATE` then sets `ts = boot_ts + offset` for every pending reading from this
+   boot, and those readings are released as `corrected`.
+4. **Some readings can't be corrected.** If the Pi rebooted before ever syncing, that
+   boot's offset is unknowable. Those readings are released immediately as `estimated`.
+   So are readings held longer than `TIME_SYNC_MAX_HOLD_S` (24 h by default).
+
+Settings: `TIME_SYNC_POLL_S` and `TIME_SYNC_MAX_HOLD_S` in `sysconfig.py`. While held,
+readings show up in the health topic as `awaiting_time_sync`.
+
+The fewer readings that need correcting, the better. Two ways to get there:
+
+- **Use a local NTP server** (below), so the clock syncs whenever the local network is
+  up, even without internet access.
+- **Add an RTC module** (e.g. DS3231) for accurate time through outages *and* reboots.
+
+### Using a local NTP server
+
+NTP needs a *reachable* NTP server, not internet access. By default the Pi uses Debian's
+public pool, so a station without internet never syncs. To use a server on the local
+network instead (typically the broker host), list it in `sysconfig.py`, in order of
+preference:
+
+```python
+NTP_SERVERS: list[str] = _env_list("NTP_SERVERS") or ["192.168.1.10", "pool.ntp.org"]
+```
+
+Or set it per device in `/etc/measure-station/env`:
+`MEASURE_STATION_NTP_SERVERS=192.168.1.10,pool.ntp.org`. Then run
+`sudo systemctl restart measure-station`.
+
+How it works:
+
+- On every service start, a small step (`measure_station.ntp_setup`) runs as root before
+  the station itself. It writes the list to
+  `/etc/systemd/timesyncd.conf.d/measure-station.conf`, and restarts `systemd-timesyncd`
+  only if the list changed.
+- An empty list removes that file, so the OS defaults return.
+- Entries must be plain host names or IP addresses. Anything else is a configuration
+  error and the station won't start.
+- If this step fails, the error is logged and the station still starts, keeping the
+  previous NTP settings.
+- It only configures `systemd-timesyncd`, the Raspberry Pi OS default. If you've switched
+  to another NTP daemon (e.g. chrony), it logs a warning and you configure that daemon
+  yourself.
+
+To check it's working, run `timedatectl timesync-status`. The `Server:` line should show
+your local server. The health topic's `clock_synced` should become `true` shortly after
+boot.
+
+**Setting up the server** (on the broker host or any always-on machine on the LAN), with
+chrony as an example:
+
+```bash
+sudo apt-get install -y chrony
+echo "allow 192.168.1.0/24" | sudo tee /etc/chrony/conf.d/stations.conf   # your station subnet
+# Only if this host itself has no internet/upstream NTP: serve its own clock anyway,
+# so stations at least agree with the server (and with each other).
+echo "local stratum 10" | sudo tee -a /etc/chrony/conf.d/stations.conf
+sudo systemctl restart chrony
+```
+
+Allow UDP port 123 through any firewall between the stations and the server. If the server
+has no upstream time source, all timestamps are only as accurate as its clock. That's
+still consistent across stations, and still far better than a Pi that never syncs.
 
 ## Broker and consumer requirements
 
@@ -175,6 +263,8 @@ a message and still lose it if:
   messages beyond that are dropped.
 - **Grant each station publish rights** (including retained messages) on
   `<base>/<station>/#`.
+- **Consider serving NTP from the broker host** if stations have no internet access. See
+  [Using a local NTP server](#using-a-local-ntp-server).
 
 Example Mosquitto settings:
 
@@ -206,6 +296,10 @@ especially on managed cloud brokers.
   and resends after reconnects, so arrival order isn't guaranteed.
 - **Expect late data.** After an outage, readings arrive hours or days late with their
   original `ts`. Aggregations and alerts must handle data arriving after its time window.
+  Readings taken before the station's clock synced are deliberately held until they can
+  be corrected, so they can arrive late even when the network was up.
+- **Check `ts_quality`.** Treat `estimated` timestamps as approximate: flag them, or
+  exclude them from time-sensitive analysis.
 
 ### Monitoring
 

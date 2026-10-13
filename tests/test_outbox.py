@@ -1,79 +1,105 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from measure_station.models import OutboxMessage
-from measure_station.storage import Outbox
+from conftest import FakeTime, make_outbox
+from measure_station.clock import ClockState
+from measure_station.storage import SCHEMA_VERSION, Outbox
 
 
 @pytest.fixture
-def outbox(tmp_path: Path):
-    box = Outbox(tmp_path / "outbox.sqlite3", max_rows=5)
-    box.open()
+def outbox(tmp_path: Path, synced_clock: ClockState):
+    box = make_outbox(tmp_path / "outbox.sqlite3", synced_clock, max_rows=5)
     yield box
     box.close()
 
 
-def _messages(n: int, start: int = 0) -> list[OutboxMessage]:
-    return [OutboxMessage(f"t/{i}", f'{{"i":{i}}}', float(i)) for i in range(start, start + n)]
+def _add(box: Outbox, fake_time: FakeTime, n: int, start: int = 0) -> None:
+    box.add_many(fake_time.reading(source=f"s{i}") for i in range(start, start + n))
 
 
-def test_fetch_returns_oldest_first_without_removing(outbox: Outbox) -> None:
-    outbox.add_many(_messages(3))
+def test_fetch_returns_oldest_first_without_removing(outbox: Outbox, fake_time: FakeTime) -> None:
+    _add(outbox, fake_time, 3)
     batch = outbox.fetch_batch(2)
-    assert [m.topic for m in batch] == ["t/0", "t/1"]
+    assert [m.source for m in batch] == ["s0", "s1"]
     assert outbox.count() == 3
 
 
-def test_delete_removes_only_acknowledged(outbox: Outbox) -> None:
-    outbox.add_many(_messages(3))
+def test_delete_removes_only_acknowledged(outbox: Outbox, fake_time: FakeTime) -> None:
+    _add(outbox, fake_time, 3)
     first, _, third = outbox.fetch_batch(3)
     outbox.delete([first.id, third.id])
-    assert [m.topic for m in outbox.fetch_batch(10)] == ["t/1"]
+    assert [m.source for m in outbox.fetch_batch(10)] == ["s1"]
 
 
-def test_order_preserved_when_newest_row_deleted_and_id_reused(outbox: Outbox) -> None:
-    outbox.add_many(_messages(3))
+def test_order_preserved_when_newest_row_deleted_and_id_reused(
+    outbox: Outbox, fake_time: FakeTime
+) -> None:
+    _add(outbox, fake_time, 3)
     newest = outbox.fetch_batch(3)[-1]
     outbox.delete([newest.id])
-    outbox.add_many(_messages(1, start=9))
-    assert [m.topic for m in outbox.fetch_batch(10)] == ["t/0", "t/1", "t/9"]
+    _add(outbox, fake_time, 1, start=9)
+    assert [m.source for m in outbox.fetch_batch(10)] == ["s0", "s1", "s9"]
 
 
-def test_prune_discards_oldest_beyond_capacity(outbox: Outbox) -> None:
-    outbox.add_many(_messages(8))
+def test_prune_discards_oldest_beyond_capacity(outbox: Outbox, fake_time: FakeTime) -> None:
+    _add(outbox, fake_time, 8)
     assert outbox.prune() == 3
-    assert [m.topic for m in outbox.fetch_batch(10)] == ["t/3", "t/4", "t/5", "t/6", "t/7"]
+    assert [m.source for m in outbox.fetch_batch(10)] == ["s3", "s4", "s5", "s6", "s7"]
     assert outbox.prune() == 0
 
 
-def test_survives_reopen(tmp_path: Path) -> None:
+def test_survives_reopen(tmp_path: Path, synced_clock: ClockState, fake_time: FakeTime) -> None:
     path = tmp_path / "outbox.sqlite3"
-    box = Outbox(path, max_rows=100)
-    box.open()
-    box.add_many(_messages(2))
+    box = make_outbox(path, synced_clock)
+    _add(box, fake_time, 2)
     box.close()
 
-    reopened = Outbox(path, max_rows=100)
-    reopened.open()
+    reopened = make_outbox(path, synced_clock)
     assert reopened.count() == 2
     reopened.close()
 
 
-def test_corrupt_file_is_quarantined_and_replaced(tmp_path: Path) -> None:
+def test_corrupt_file_is_quarantined_and_replaced(
+    tmp_path: Path, synced_clock: ClockState, fake_time: FakeTime
+) -> None:
     path = tmp_path / "outbox.sqlite3"
     path.write_bytes(b"this is not a sqlite database" * 100)
 
-    box = Outbox(path, max_rows=100)
-    box.open()
+    box = make_outbox(path, synced_clock)
     assert box.count() == 0
-    box.add_many(_messages(1))
+    _add(box, fake_time, 1)
     assert box.count() == 1
     box.close()
 
     assert list(tmp_path.glob("outbox.sqlite3.corrupt-*"))
 
 
-def test_rejects_invalid_synchronous_mode(tmp_path: Path) -> None:
+def test_old_schema_is_set_aside(tmp_path: Path, synced_clock: ClockState) -> None:
+    path = tmp_path / "outbox.sqlite3"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE outbox (id INTEGER PRIMARY KEY, topic TEXT, payload TEXT)")
+    conn.execute("INSERT INTO outbox (topic, payload) VALUES ('t', 'p')")
+    conn.commit()
+    conn.close()
+
+    box = make_outbox(path, synced_clock)
+    assert box.count() == 0
+    box.close()
+
+    assert list(tmp_path.glob("outbox.sqlite3.old-schema-*"))
+    conn = sqlite3.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    conn.close()
+
+
+def test_rejects_invalid_synchronous_mode(tmp_path: Path, synced_clock: ClockState) -> None:
     with pytest.raises(ValueError):
-        Outbox(tmp_path / "x.sqlite3", max_rows=1, synchronous="SOMETIMES")
+        Outbox(
+            tmp_path / "x.sqlite3",
+            clock=synced_clock,
+            max_rows=1,
+            max_time_hold_s=0,
+            synchronous="SOMETIMES",
+        )

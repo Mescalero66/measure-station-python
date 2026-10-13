@@ -28,6 +28,11 @@ def _env(name: str, default: str | None = None) -> str | None:
     return os.environ.get(f"MEASURE_STATION_{name}", default)
 
 
+def _env_list(name: str) -> list[str]:
+    """Read an optional comma/space-separated ``MEASURE_STATION_<name>`` override."""
+    return (_env(name) or "").replace(",", " ").split()
+
+
 # --------------------------------------------------------------------------- #
 # Station identity
 # --------------------------------------------------------------------------- #
@@ -105,6 +110,30 @@ READING_QUEUE_MAXSIZE: int = 1000
 RECORDER_FLUSH_INTERVAL_S: float = 10.0
 # Flush early once this many readings are pending, whatever the interval.
 RECORDER_BATCH_SIZE: int = 200
+
+# --------------------------------------------------------------------------- #
+# Timekeeping (the Pi has no real-time clock)
+# --------------------------------------------------------------------------- #
+# NTP servers for the Pi's clock (systemd-timesyncd), as hostnames or IP addresses, in
+# order of preference. NTP needs a reachable server, not internet access: point this
+# at a server on the local network (e.g. the broker host) so the clock syncs even when
+# the internet is unreachable. Add a public server after it as a backup, e.g.
+#     NTP_SERVERS = ["192.168.1.10", "pool.ntp.org"]
+# Empty = the OS defaults (Debian's public pool, which needs internet access).
+# Applied as root each time the service starts (see measure_station/ntp_setup.py).
+NTP_SERVERS: list[str] = _env_list("NTP_SERVERS") or []
+
+# Until NTP has synchronised the clock after a boot, readings are stored with their
+# seconds-since-boot and held back from MQTT. On sync they are back-dated to accurate
+# timestamps (published with "ts_quality": "corrected") and released.
+#
+# How often to check for NTP synchronisation while unsynchronised.
+TIME_SYNC_POLL_S: float = 10.0
+# Longest a reading is held waiting for a time correction. After this it is published
+# anyway, with its unsynchronised timestamp ("ts_quality": "estimated"). This bounds
+# the delivery delay at sites where NTP is unreachable even though the broker isn't.
+# 0 = never hold (publish immediately; pre-sync readings are always "estimated").
+TIME_SYNC_MAX_HOLD_S: float = 24 * 3600
 
 # --------------------------------------------------------------------------- #
 # Concurrency and self-recovery

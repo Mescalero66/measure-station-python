@@ -14,6 +14,10 @@ NotifyAccess=main
 User=@APP_USER@
 Group=@APP_USER@
 WorkingDirectory=@APP_DIR@
+# Apply sysconfig.NTP_SERVERS to systemd-timesyncd. "+" runs this step alone as root
+# (the hardening below doesn't apply to it); "-" means a failure is logged but never
+# stops the station.
+ExecStartPre=-+@APP_DIR@/.venv/bin/python -m measure_station.ntp_setup
 ExecStart=@APP_DIR@/.venv/bin/python -m measure_station
 EnvironmentFile=-/etc/measure-station/env
 Environment=PYTHONUNBUFFERED=1

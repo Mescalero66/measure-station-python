@@ -18,14 +18,17 @@ from types import ModuleType
 from typing import Any
 
 from measure_station import __version__, sysconfig
+from measure_station.clock import ClockState
 from measure_station.health import report_health
 from measure_station.logging_setup import configure_logging
 from measure_station.models import MessageEncoder, Reading
+from measure_station.ntp_setup import invalid_servers
 from measure_station.publisher import MqttPublisher, MqttSettings
 from measure_station.recorder import record_readings
 from measure_station.sensors import create_sensor, poll_sensor
 from measure_station.storage import Outbox
 from measure_station.supervisor import Supervisor
+from measure_station.timesync import monitor_clock_sync
 from measure_station.uart import UartConfig, read_uart
 from measure_station.watchdog import SystemdNotifier, run_watchdog, watchdog_interval_s
 
@@ -75,9 +78,16 @@ async def run(cfg: ModuleType) -> None:
     stop = asyncio.Event()
     _install_signal_handlers(loop, stop.set)
 
+    clock = ClockState()
+    await asyncio.to_thread(clock.poll)  # already synced if this is a mid-boot restart
+    if not clock.synced:
+        log.warning("System clock not yet synchronised; readings will be held for correction")
+
     outbox = Outbox(
         cfg.DATA_DIR / cfg.OUTBOX_FILENAME,
+        clock=clock,
         max_rows=cfg.OUTBOX_MAX_ROWS,
+        max_time_hold_s=cfg.TIME_SYNC_MAX_HOLD_S,
         synchronous=cfg.OUTBOX_SQLITE_SYNCHRONOUS,
     )
     await asyncio.to_thread(outbox.open)
@@ -85,7 +95,7 @@ async def run(cfg: ModuleType) -> None:
     queue: asyncio.Queue[Reading] = asyncio.Queue(maxsize=cfg.READING_QUEUE_MAXSIZE)
     new_data = asyncio.Event()
     encoder = MessageEncoder(cfg.MQTT_BASE_TOPIC, cfg.STATION_ID)
-    supervisor = build_supervisor(cfg, queue, outbox, encoder, new_data)
+    supervisor = build_supervisor(cfg, clock, queue, outbox, encoder, new_data)
     notifier = SystemdNotifier()
 
     try:
@@ -115,6 +125,7 @@ async def run(cfg: ModuleType) -> None:
 
 def build_supervisor(
     cfg: ModuleType,
+    clock: ClockState,
     queue: asyncio.Queue[Reading],
     outbox: Outbox,
     encoder: MessageEncoder,
@@ -133,7 +144,6 @@ def build_supervisor(
             record_readings,
             queue,
             outbox,
-            encoder,
             new_data,
             flush_interval_s=cfg.RECORDER_FLUSH_INTERVAL_S,
             batch_size=cfg.RECORDER_BATCH_SIZE,
@@ -143,8 +153,16 @@ def build_supervisor(
         stale_after_s=stale_s,
     )
 
-    publisher = MqttPublisher(_mqtt_settings(cfg, encoder), outbox, new_data)
+    publisher = MqttPublisher(_mqtt_settings(cfg, encoder), outbox, encoder, new_data)
     supervisor.add("publisher", publisher.run, stale_after_s=stale_s)
+
+    supervisor.add(
+        "timesync",
+        functools.partial(
+            monitor_clock_sync, clock, outbox, new_data, poll_interval_s=cfg.TIME_SYNC_POLL_S
+        ),
+        stale_after_s=stale_s,
+    )
 
     for sensor_cfg in _enabled(cfg.SENSORS):
         sensor = create_sensor(sensor_cfg)
@@ -175,6 +193,7 @@ def build_supervisor(
             queue,
             outbox,
             supervisor,
+            clock,
             source=cfg.HEALTH_SOURCE_NAME,
             interval_s=cfg.HEALTH_INTERVAL_S,
             data_dir=cfg.DATA_DIR,
@@ -198,6 +217,12 @@ def validate_config(cfg: Any) -> list[str]:
         errors.append("RECORDER_FLUSH_INTERVAL_S must be >= 0")
     if cfg.RECORDER_BATCH_SIZE < 1:
         errors.append("RECORDER_BATCH_SIZE must be >= 1")
+    if cfg.TIME_SYNC_POLL_S <= 0:
+        errors.append("TIME_SYNC_POLL_S must be > 0")
+    if cfg.TIME_SYNC_MAX_HOLD_S < 0:
+        errors.append("TIME_SYNC_MAX_HOLD_S must be >= 0")
+    if bad_ntp := invalid_servers(cfg.NTP_SERVERS):
+        errors.append(f"NTP_SERVERS contains invalid host names or addresses: {bad_ntp!r}")
 
     sources = [cfg.HEALTH_SOURCE_NAME]
     for entry in _enabled(cfg.SENSORS):
@@ -222,11 +247,13 @@ def validate_config(cfg: Any) -> list[str]:
             errors.append(f"duplicate source name {name!r}")
         seen.add(name)
 
-    longest_wait = max(cfg.TASK_RESTART_MAX_S, cfg.MQTT_RECONNECT_MAX_S, cfg.MQTT_IDLE_POLL_S)
+    longest_wait = max(
+        cfg.TASK_RESTART_MAX_S, cfg.MQTT_RECONNECT_MAX_S, cfg.MQTT_IDLE_POLL_S, cfg.TIME_SYNC_POLL_S
+    )
     if longest_wait >= cfg.TASK_STALE_AFTER_S:
         errors.append(
             f"TASK_STALE_AFTER_S ({cfg.TASK_STALE_AFTER_S}) must exceed TASK_RESTART_MAX_S, "
-            f"MQTT_RECONNECT_MAX_S and MQTT_IDLE_POLL_S ({longest_wait})"
+            f"MQTT_RECONNECT_MAX_S, MQTT_IDLE_POLL_S and TIME_SYNC_POLL_S ({longest_wait})"
         )
     if len(uart_links) + 4 > cfg.THREAD_POOL_WORKERS:
         errors.append(

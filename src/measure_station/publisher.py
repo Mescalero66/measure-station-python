@@ -10,7 +10,8 @@ from dataclasses import dataclass
 import aiomqtt
 
 from measure_station.backoff import ExponentialBackoff
-from measure_station.storage import Outbox, StoredMessage
+from measure_station.models import MessageEncoder, StoredReading
+from measure_station.storage import Outbox
 from measure_station.supervisor import Heartbeat
 
 log = logging.getLogger(__name__)
@@ -48,9 +49,16 @@ class MqttPublisher:
     outbox until the link returns.
     """
 
-    def __init__(self, settings: MqttSettings, outbox: Outbox, new_data: asyncio.Event) -> None:
+    def __init__(
+        self,
+        settings: MqttSettings,
+        outbox: Outbox,
+        encoder: MessageEncoder,
+        new_data: asyncio.Event,
+    ) -> None:
         self._settings = settings
         self._outbox = outbox
+        self._encoder = encoder
         self._new_data = new_data
 
     async def run(self, *, heartbeat: Heartbeat) -> None:
@@ -90,9 +98,9 @@ class MqttPublisher:
                 continue
             await self._publish_batch(client, batch)
 
-    async def _publish_batch(self, client: aiomqtt.Client, batch: list[StoredMessage]) -> None:
+    async def _publish_batch(self, client: aiomqtt.Client, batch: list[StoredReading]) -> None:
         results = await asyncio.gather(
-            *(self._publish(client, m.topic, m.payload) for m in batch),
+            *(self._publish(client, *self._encoder.encode(m)) for m in batch),
             return_exceptions=True,
         )
         delivered = [m.id for m, r in zip(batch, results, strict=True) if r is None]
