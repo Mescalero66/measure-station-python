@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Measure Station local data (dev runs)
+data/
+*.sqlite3
+*.sqlite3-*

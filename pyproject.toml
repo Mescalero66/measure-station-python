@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "measure-station"
+dynamic = ["version"]
+description = "Always-on Raspberry Pi environmental measurement station with store-and-forward MQTT publishing."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiomqtt>=2.3,<3",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+# Hardware drivers are optional so the package installs (and tests run) on any machine.
+bme280 = [
+    "smbus2>=0.4",
+    "RPi.bme280>=0.2.4",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+measure-station = "measure_station.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "measure_station.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

@@ -1,0 +1,43 @@
+# Installed by deploy/install.sh (@APP_DIR@ and @APP_USER@ are substituted).
+[Unit]
+Description=Measure Station environmental data logger
+Documentation=file://@APP_DIR@/README.md
+# Deliberately NOT waiting for network-online.target: measurements must start
+# (and be buffered locally) even when the network is down.
+After=time-sync.target
+# Never give up restarting.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/.venv/bin/python -m measure_station
+EnvironmentFile=-/etc/measure-station/env
+Environment=PYTHONUNBUFFERED=1
+
+# Self-recovery: restart on any exit, crash or watchdog timeout...
+Restart=always
+RestartSec=5
+# ...except a configuration error (EX_CONFIG), which needs a human.
+RestartPreventExitStatus=78
+# The app pings every WatchdogSec/2 while all tasks are healthy.
+WatchdogSec=120
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Persistent data in /var/lib/measure-station (exported as $STATE_DIRECTORY).
+StateDirectory=measure-station
+StateDirectoryMode=0750
+
+# Hardening. Hardware access (/dev/i2c-*, /dev/serial*) comes from the service
+# user's group membership (i2c, dialout, gpio), so PrivateDevices must stay off.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

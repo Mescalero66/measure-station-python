@@ -1,0 +1,5 @@
+# Files run on the Pi must have LF endings, even when committed from Windows.
+* text=auto eol=lf
+*.sh text eol=lf
+*.service text eol=lf
+*.conf text eol=lf
