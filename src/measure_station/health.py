@@ -16,6 +16,9 @@ from measure_station.storage import Outbox
 from measure_station.supervisor import Heartbeat, Supervisor
 from measure_station.uart import MqBoardDecoder
 
+# The health report describes the station itself, not a sensor.
+SENSOR_TYPE = "station"
+
 
 async def report_health(
     queue: asyncio.Queue[Reading],
@@ -44,7 +47,7 @@ async def report_health(
         if mqboard is not None:
             for key, value in mqboard.status(boot_clock()).items():
                 values[f"mqboard_{key}"] = value
-        await queue.put(Reading(source=source, values=values))
+        await queue.put(Reading(source=source, sensor_type=SENSOR_TYPE, values=values))
         await asyncio.sleep(interval_s)
 
 

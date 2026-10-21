@@ -56,7 +56,7 @@ def test_readings_are_grouped_into_one_write_per_interval(outbox: CountingOutbox
         queue: asyncio.Queue[Reading] = asyncio.Queue()
         task = _start(outbox, queue, flush_interval_s=0.3)
         for i in range(5):
-            await queue.put(Reading(source="s", values={"i": i}))
+            await queue.put(Reading(source="s", sensor_type="simulated", values={"i": i}))
             await asyncio.sleep(0.02)
         assert outbox.count() == 0  # still held in memory
         await asyncio.sleep(0.4)
@@ -72,7 +72,7 @@ def test_batch_size_forces_early_flush(outbox: CountingOutbox) -> None:
         queue: asyncio.Queue[Reading] = asyncio.Queue()
         task = _start(outbox, queue, flush_interval_s=60, batch_size=3)
         for i in range(3):
-            await queue.put(Reading(source="s", values={"i": i}))
+            await queue.put(Reading(source="s", sensor_type="simulated", values={"i": i}))
         await asyncio.sleep(0.1)
         assert outbox.count() == 3
         await _stop(task)
@@ -84,7 +84,7 @@ def test_zero_interval_writes_immediately(outbox: CountingOutbox) -> None:
     async def scenario() -> None:
         queue: asyncio.Queue[Reading] = asyncio.Queue()
         task = _start(outbox, queue, flush_interval_s=0)
-        await queue.put(Reading(source="s", values={"i": 0}))
+        await queue.put(Reading(source="s", sensor_type="simulated", values={"i": 0}))
         await asyncio.sleep(0.05)
         assert outbox.count() == 1
         await _stop(task)
@@ -96,9 +96,10 @@ def test_clean_shutdown_flushes_pending_and_queued(outbox: CountingOutbox) -> No
     async def scenario() -> None:
         queue: asyncio.Queue[Reading] = asyncio.Queue()
         task = _start(outbox, queue, flush_interval_s=60)
-        await queue.put(Reading(source="s", values={"i": 0}))
+        await queue.put(Reading(source="s", sensor_type="simulated", values={"i": 0}))
         await asyncio.sleep(0.05)  # picked up into the pending group
-        await queue.put(Reading(source="s", values={"i": 1}))  # possibly still queued
+        # Possibly still queued:
+        await queue.put(Reading(source="s", sensor_type="simulated", values={"i": 1}))
         await _stop(task)
 
     asyncio.run(scenario())

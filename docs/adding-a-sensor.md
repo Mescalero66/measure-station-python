@@ -2,12 +2,13 @@
 
 A sensor is a small driver class that knows how to talk to one piece of hardware and
 return its measurements. Everything else (scheduling, timestamps, buffering, retries,
-MQTT) is handled by the station. Adding one takes four steps:
+MQTT) is handled by the station. Adding one takes five steps:
 
 1. [Write the driver](#1-write-the-driver) in `src/measure_station/sensors/`.
 2. [Register it](#2-register-the-driver) in `SENSOR_TYPES`.
 3. [Configure it](#3-configure-the-sensor) in `SENSORS` in `sysconfig.py`.
 4. [Install its dependencies](#4-install-dependencies), if it needs any.
+5. [Document it](#5-document-the-sensor) in `docs/sensors/`.
 
 There's a complete [worked example](#worked-example-bh1750-light-sensor) at the end.
 
@@ -22,8 +23,10 @@ existing drivers:
 src/measure_station/sensors/
 ├── __init__.py          # SENSOR_TYPES registry
 ├── base.py              # the Sensor base class and the polling loop
-├── bme280_i2c.py        # BME280 temperature / humidity / pressure (I2C)
+├── bmp280_i2c.py        # BMP280 pressure sensor (adapter for an asyncio driver)
 ├── cpu_temperature.py   # Pi SoC temperature (no hardware needed)
+├── ens160_aht21_i2c.py  # ENS160 + AHT21 air quality board (adapter, see below)
+├── scd41_i2c.py         # SCD41 CO2 sensor (adapter for an asyncio driver)
 ├── simulated.py         # fake data for development
 └── bh1750_i2c.py        # <- your new driver
 ```
@@ -31,9 +34,41 @@ src/measure_station/sensors/
 - **Module name:** describe the part and bus, e.g. `bh1750_i2c.py`, `sht31_i2c.py`,
   `ds18b20_1wire.py`.
 - **Don't reuse a library's name.** Never give the module the same name as the Python
-  library it imports (`bme280.py` importing `bme280`). That's why the existing driver
-  is `bme280_i2c.py`.
+  library it imports (`bme280.py` importing `bme280`): the module would shadow the
+  library. Adding the bus avoids this (`bme280_i2c.py`).
 - **Class name:** the part name plus `Sensor`, e.g. `Bh1750Sensor`.
+
+### Using a Driver From drivers-repo
+
+If the chip already has a driver in drivers-repo, don't rewrite it. Use it unchanged,
+behind a small adapter:
+
+1. **Copy the driver verbatim** into `src/measure_station/drivers/`. Don't edit or
+   reformat it there: make changes in drivers-repo and copy them over, so the two stay
+   identical. Ruff skips this folder for that reason.
+2. **Write the adapter** in `src/measure_station/sensors/`, as described below. Its
+   `open()` imports the driver (`from measure_station.drivers.<module> import ...`) and
+   starts the chip. Its `read()` calls the driver and renames the results to the
+   station's [value keys](#measurement-names-and-units).
+
+The driver must be imported inside `open()`, never at the top of the adapter. Drivers
+import their hardware libraries (e.g. `smbus2`) at the top, and the adapter is imported
+on every machine, including during config validation and tests.
+
+If the driver is `asyncio`-based (its methods are coroutines), the adapter's `open()` and
+`read()` still block: run each coroutine with `asyncio.run()`. They run in a worker
+thread, so this gives each call its own short-lived event loop there, and the driver's
+blocking bus transfers stay off the station's event loop. `bmp280_i2c.py` is the
+example. Two things to watch, both handled in `scd41_i2c.py`:
+
+- **`close()` runs on the station's event loop thread**, where `asyncio.run()` raises.
+  Keep it synchronous: just close the bus.
+- **If the first result takes time** after `open()` starts the sensor, wait for it in
+  `read()`, within `SENSOR_READ_TIMEOUT_S`. Raising instead would re-open the sensor,
+  which restarts the wait, and so on forever.
+
+`ens160_aht21_i2c.py` is the reference example. Its tests (`tests/test_ens160_aht21.py`)
+replace the driver with a fake board, so they run without hardware.
 
 ### The `Sensor` Class
 
@@ -43,8 +78,8 @@ Subclass `measure_station.sensors.base.Sensor` and implement these methods:
 |---|---|---|---|
 | `__init__(self, name, interval_s, **options)` | yes | at startup, **and during config validation on any machine** | Call `super().__init__(name, interval_s)` and store the options. **Never touch hardware here.** |
 | `open(self)` | no | before the first read, and again after any failure | Acquire hardware: open the bus, configure the chip, load calibration. |
-| `read(self)` | yes | every `interval_s` seconds | Take one measurement and return `{field_name: value}`. |
-| `close(self)` | no | after a failure, and at shutdown | Release hardware. Must be safe to call more than once, or before `open()`. |
+| `read(self)` | yes | every `interval_s` seconds | Take one measurement and return a `Sample(values, meta)` (see [Values and Meta](#values-and-meta)). |
+| `close(self)` | no | after a failure (including a failed `open()`), and at shutdown | Release hardware. Must be safe to call more than once, or before `open()`. |
 
 Your options are the extra keys in the sensor's `SENSORS` entry, passed to `__init__` as
 keyword arguments. Give each one a sensible default, e.g. `i2c_bus=1, address=0x23`.
@@ -66,20 +101,52 @@ keyword arguments. Give each one a sensible default, e.g. `i2c_bus=1, address=0x
 - **Import hardware libraries inside `open()`**, not at the top of the module, so the
   station (and its tests) still run on machines without them.
 
+### Using Another Sensor's Values
+
+A sensor can use another sensor's latest readings, e.g. for compensation. The SCD41
+uses the barometer's pressure this way (`scd41_i2c.py`):
+
+- **Read them** with `self.latest_values.get(source, key)`, for a key in that sensor's
+  `values`. It returns `None` if that sensor hasn't produced the key yet, or has missed two of its own readings. Always
+  have a fallback. `latest_values` is also `None` when the sensor runs on its own (e.g.
+  in `read_sensor`).
+- **Declare the source** by overriding `uses_sources()` to return its name. Startup then
+  checks that it's another enabled sensor, so a misspelt name is a configuration error.
+- **Publish what you used** in the reading's `meta`, so consumers can tell how each
+  reading was made.
+
+## Values and Meta
+
+`read()` returns a `Sample` (from `measure_station.sensors`) with two dictionaries,
+published as-is as the reading's `values` and `meta`:
+
+```python
+return Sample(
+    values={"pressure_hpa": 1006.53},  # what the sensor is there to measure
+    meta={"temperature_c": 25.08},  # how it was measured, or how far to trust it
+)
+```
+
+- **`values`:** the readings consumers chart and store.
+- **`meta`:** compensation inputs, status and quality flags, calibration parameters.
+  Optional: `Sample({...})` has none, and an empty `meta` isn't published.
+- **Flags are text or booleans, never numeric codes**, e.g. `"warmup"` rather than
+  `1`, so a message can be read without a code table.
+
 ## Measurement Names and Units
 
-`read()` returns a dictionary, and it is published as-is as the reading's `values`. The
-keys are what consumers use to tell measurements apart, so they carry both the **type
-of measurement** and the **unit**:
+The keys in `values` and `meta` are what consumers use to tell measurements apart, so
+they carry both the **type of measurement** and the **unit**:
 
 ```
 <quantity>_<unit>        e.g.  temperature_c, humidity_pct, pressure_hpa
 ```
 
 - **Lowercase snake_case.** The quantity first, the unit as a suffix.
-- **No suffix when there's no unit.** Text codes and true/false values have no unit, so
-  they're just named for what they are, e.g. the MQ board's `gas` and
-  `baseline_tracking`. A bare count takes `_count`.
+- **No suffix when there's no unit.** Text codes, status codes, indexes and true/false
+  values have no unit, so they're just named for what they are, e.g. the MQ board's
+  `gas` and `baseline_tracking`, and the air quality board's `aqi` and `validity`. A
+  bare count takes `_count`.
 - **Use the units in the table below** where they fit, so the same quantity has the
   same key whichever sensor measures it.
 - **Never change a key once data has been published.** Consumers store and query by
@@ -89,7 +156,8 @@ of measurement** and the **unit**:
 - **Values must be JSON types:** `int`, `float`, `bool`, `str` or `None`. `NaN` and
   infinity are published as `null`. Anything else (e.g. `Decimal`) is converted to a
   string, so convert it yourself first.
-- **Document each key** in the driver's module docstring, with its unit and range.
+- **Document each key** in the driver's module docstring, under `Values:` and `Meta:`,
+  with its unit and range.
 
 | Quantity | Unit | Suffix | Example key |
 |---|---|---|---|
@@ -97,6 +165,7 @@ of measurement** and the **unit**:
 | Relative humidity | % | `_pct` | `humidity_pct` |
 | Pressure | hPa | `_hpa` | `pressure_hpa` |
 | Gas concentration | ppm | `_ppm` | `co2_ppm` |
+| Gas concentration (trace) | ppb | `_ppb` | `tvoc_ppb` |
 | Illuminance | lux | `_lux` | `illuminance_lux` |
 | Voltage | V | `_v` | `supply_v` |
 | Current | A | `_a` | `load_a` |
@@ -108,12 +177,15 @@ of measurement** and the **unit**:
 | Duration | s | `_s` | `uptime_s` |
 | Count | (none) | `_count` | `pulse_count` |
 
-A sensor that measures several things returns several keys in the same reading. The
-BME280 returns `temperature_c`, `humidity_pct` and `pressure_hpa` together.
+A sensor that measures several things returns several keys in the same reading. A
+temperature, humidity and pressure sensor returns `temperature_c`, `humidity_pct` and
+`pressure_hpa` together.
 
 Every source in the station follows this convention, so the same quantity has the same
-key everywhere. The CPU sensor, the BME280 and the MQ board all publish temperature as
-`temperature_c` (see the MQ board's fields in [MQ Gas Board](mq-gas-board.md)).
+key everywhere. The CPU sensor, the air quality board and the MQ board all publish
+temperature as `temperature_c` (see [Air Quality Board](sensors/air-quality-board.md) and the
+MQ board's fields in [MQ Gas Board](sensors/mq-gas-board.md)). The source tells consumers
+where it was measured.
 
 ## 2. Register the Driver
 
@@ -124,8 +196,8 @@ from measure_station.sensors.bh1750_i2c import Bh1750Sensor
 
 SENSOR_TYPES: dict[str, type[Sensor]] = {
     "bh1750": Bh1750Sensor,
-    "bme280": Bme280Sensor,
     "cpu_temperature": CpuTemperatureSensor,
+    "ens160_aht21": Ens160Aht21Sensor,
     "simulated": SimulatedSensor,
 }
 ```
@@ -141,7 +213,7 @@ Add an entry to `SENSORS` in `src/measure_station/sysconfig.py`:
 SENSORS: list[dict[str, Any]] = [
     # ...existing sensors...
     {
-        "type": "bh1750",  # the SENSOR_TYPES key
+        "type": "bh1750",  # the SENSOR_TYPES key, published as sensor_type
         "name": "ambient-light",  # the MQTT source name (see below)
         "interval_s": 30,  # seconds between readings
         "address": 0x23,  # driver option, passed to __init__
@@ -184,11 +256,11 @@ If the driver needs a Python library, add an optional dependency group for it in
 bh1750 = ["smbus2>=0.4"]
 ```
 
-Then install it on the Pi. Either re-run the installer with the extra listed (it's safe
-to re-run):
+Then install it on the Pi. Either re-run the installer with the extras listed,
+comma-separated (it's safe to re-run):
 
 ```bash
-sudo EXTRAS="bme280,bh1750" bash /opt/measure-station/deploy/install.sh
+sudo EXTRAS="ens160_aht21,bh1750" bash /opt/measure-station/deploy/install.sh
 ```
 
 or install it into the station's virtualenv directly:
@@ -196,6 +268,9 @@ or install it into the station's virtualenv directly:
 ```bash
 sudo /opt/measure-station/.venv/bin/pip install -e "/opt/measure-station[bh1750]"
 ```
+
+If the sensor is enabled in the shipped `sysconfig.py`, also add its extra to the
+default `EXTRAS` in `deploy/install.sh`, so a fresh install includes it.
 
 - **Prefer pure-Python libraries.** Packages that compile C code can take a very long
   time to build on a Pi 2B. Raspberry Pi OS fetches prebuilt wheels from piwheels where
@@ -207,13 +282,30 @@ sudo /opt/measure-station/.venv/bin/pip install -e "/opt/measure-station[bh1750]
   without root. Enable the bus itself with `raspi-config` if it isn't already (the
   installer enables I2C and the UART).
 
+## 5. Document the Sensor
+
+Give each sensor its own page in `docs/sensors/`, named for what it measures, e.g.
+`docs/sensors/pressure-sensor.md`. Use an existing page, such as
+[Pressure Sensor](sensors/pressure-sensor.md), as the template:
+
+- **Wiring:** a table from the board's pins to the Pi's header pins, its supply voltage,
+  and how to check it's connected (e.g. `i2cdetect -y 1`).
+- **What gets published:** an example message, and a table of its value keys with their
+  meanings, units and ranges.
+- **How to interpret the values:** anything a consumer could get wrong, such as warm-up
+  periods or a temperature measured on the board rather than in the room.
+- **Settings:** its `SENSORS` entry's options and its dependency extra.
+
+Then add it to the Hardware section of the Documentation index in `README.md`, and point
+the adapter's module docstring and its `SENSORS` comment in `sysconfig.py` at the page.
+
 ## How Readings Reach MQTT
 
 **You don't need to do anything** beyond returning values from `read()`. For every
 enabled sensor, the station runs this loop:
 
 ```
-read() returns {"illuminance_lux": 412.5}
+read() returns Sample({"illuminance_lux": 412.5})
    │
    ▼
 poll_sensor()          wraps it in a Reading: source = name, timestamped with
@@ -229,8 +321,9 @@ publisher              sends to the broker; deletes from the outbox only on PUBA
    │
    ▼
 measure-station/pi-01/ambient-light
-{"station": "pi-01", "source": "ambient-light", "ts": "2026-10-13T09:40:01.000+00:00",
- "ts_quality": "ntp", "values": {"illuminance_lux": 412.5}}
+{"station": "pi-01", "source": "ambient-light", "sensor_type": "bh1750",
+ "ts": "2026-10-13T09:40:01.000+00:00", "ts_src": "ntp",
+ "values": {"illuminance_lux": 412.5}}
 ```
 
 Because every reading goes through the outbox, the new sensor automatically gets
@@ -272,7 +365,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from measure_station.sensors.base import Sensor
+from measure_station.sensors.base import Sample, Sensor
 
 _POWER_ON = 0x01
 _CONTINUOUS_HIGH_RES = 0x10  # 1 lux resolution, ~120 ms per measurement
@@ -298,13 +391,13 @@ class Bh1750Sensor(Sensor):
         self._bus.write_byte(self._address, _CONTINUOUS_HIGH_RES)
         time.sleep(0.2)  # let the first measurement complete
 
-    def read(self) -> dict[str, float]:
+    def read(self) -> Sample:
         import smbus2
 
         message = smbus2.i2c_msg.read(self._address, 2)
         self._bus.i2c_rdwr(message)  # raises OSError if the sensor doesn't answer
         high, low = list(message)
-        return {"illuminance_lux": lux_from_raw(high, low)}
+        return Sample({"illuminance_lux": lux_from_raw(high, low)})
 
     def close(self) -> None:
         if self._bus is not None:
@@ -359,14 +452,18 @@ maths in plain functions, is what makes this possible.
 ## Checklist
 
 - [ ] Driver module in `src/measure_station/sensors/`, not named after its library.
+- [ ] A driver from drivers-repo is copied verbatim into `drivers/`, and imported only
+      inside `open()`.
 - [ ] `__init__` only stores settings. Hardware access is in `open()`, library imports
       too.
-- [ ] `read()` takes one measurement, returns `<quantity>_<unit>` keys with rounded
-      values, and raises on failure.
+- [ ] `read()` takes one measurement, returns a `Sample` with `<quantity>_<unit>` keys
+      and rounded values (flags and compensation inputs in `meta`), and raises on
+      failure.
 - [ ] `close()` is safe to call twice.
 - [ ] Value keys, units and ranges documented in the module docstring.
 - [ ] Registered in `SENSOR_TYPES`.
 - [ ] `SENSORS` entry with a unique, descriptive `name` and a sensible `interval_s`.
 - [ ] Optional dependency group in `pyproject.toml`, if it needs a library.
 - [ ] Unit tests for the conversion logic and the config entry.
+- [ ] A page in `docs/sensors/`, listed in the README's Documentation index.
 - [ ] Seen working on the Pi: log line, then messages at the broker.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from collections.abc import Sequence
 
-from measure_station.sensors.base import Sensor
+from measure_station.sensors.base import Sample, Sensor
 
 
 class SimulatedSensor(Sensor):
@@ -21,7 +21,7 @@ class SimulatedSensor(Sensor):
         self._state = dict.fromkeys(channels, float(start))
         self._step = step
 
-    def read(self) -> dict[str, float]:
+    def read(self) -> Sample:
         for channel in self._state:
             self._state[channel] += random.uniform(-self._step, self._step)
-        return {channel: round(value, 3) for channel, value in self._state.items()}
+        return Sample({channel: round(value, 3) for channel, value in self._state.items()})

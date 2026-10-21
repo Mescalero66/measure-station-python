@@ -17,7 +17,8 @@
    - enables I2C and the hardware UART, and turns off the serial login console
    - enables NTP
    - creates a `measure-station` system user with `i2c`, `dialout` and `gpio` access
-   - builds a virtualenv in `/opt/measure-station/.venv`
+   - builds a virtualenv in `/opt/measure-station/.venv`, with the sensor driver
+     dependencies listed in `EXTRAS` (default: `ens160_aht21`)
    - installs the systemd service, hardware watchdog and journald limits
 
    It is safe to re-run.

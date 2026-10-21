@@ -60,8 +60,10 @@ especially on managed cloud brokers.
   original `ts`. Aggregations and alerts must handle data arriving after its time window.
   Readings taken before the station's clock synced are deliberately held until they can
   be corrected, so they can arrive late even when the network was up.
-- **Check `ts_quality`.** Treat `estimated` timestamps as approximate: flag them, or
+- **Check `ts_src`.** Treat `estimated` timestamps as approximate: flag them, or
   exclude them from time-sensitive analysis.
+- **Check the quality flags in `meta`** before trusting `values`, e.g. the air quality
+  board's `validity` during warm-up. Each sensor's page lists its flags.
 
 ## Monitoring
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from measure_station.sensors.base import Sensor
+from measure_station.sensors.base import Sample, Sensor
 
 
 class CpuTemperatureSensor(Sensor):
@@ -17,6 +17,6 @@ class CpuTemperatureSensor(Sensor):
         super().__init__(name, interval_s)
         self._path = Path(path)
 
-    def read(self) -> dict[str, float]:
+    def read(self) -> Sample:
         millidegrees = int(self._path.read_text().strip())
-        return {"temperature_c": round(millidegrees / 1000, 2)}
+        return Sample({"temperature_c": round(millidegrees / 1000, 2)})

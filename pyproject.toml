@@ -14,11 +14,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Hardware drivers are optional so the package installs (and tests run) on any machine.
-bme280 = [
-    "smbus2>=0.4",
-    "RPi.bme280>=0.2.4",
-]
+# Sensor driver libraries are optional, so the package installs (and tests run) anywhere.
+bmp280 = ["smbus2>=0.4"]
+ens160_aht21 = ["smbus2>=0.4"]
+scd41 = ["smbus2>=0.4"]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
@@ -41,6 +40,8 @@ pythonpath = ["src"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# Verbatim copies from drivers-repo, kept identical to it (see drivers/__init__.py).
+extend-exclude = ["src/measure_station/drivers"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

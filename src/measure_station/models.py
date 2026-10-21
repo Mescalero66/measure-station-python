@@ -31,13 +31,23 @@ class Reading:
     Both clocks are captured: ``timestamp`` (wall clock, may be wrong before NTP sync)
     and ``boot_ts`` (seconds since boot, never jumps), so the timestamp can be
     corrected later. See :mod:`measure_station.clock`.
+
+    ``source`` identifies the data series (the sensor's configured name).
+    ``sensor_type`` identifies the hardware behind it (e.g. ``ens160_aht21``), so
+    consumers can see what produced a reading, and when a part was swapped.
+
+    ``values`` are what the sensor is there to measure. ``meta`` describes how the
+    reading was made or how far to trust it: compensation inputs, status flags,
+    calibration parameters. It's published only when it isn't empty.
     """
 
     source: str
+    sensor_type: str
     values: Mapping[str, Any]
     timestamp: float = field(default_factory=time.time)
     boot_ts: float = field(default_factory=boot_clock)
     seen: SeenMarker | None = None
+    meta: Mapping[str, Any] = field(default_factory=dict, kw_only=True)
 
 
 class StoredReading(NamedTuple):
@@ -45,7 +55,9 @@ class StoredReading(NamedTuple):
 
     id: int
     source: str
+    sensor_type: str
     values_json: str
+    meta_json: str
     ts: float
     ts_quality: str
     boot_id: str
@@ -75,10 +87,14 @@ class MessageEncoder:
         payload: dict[str, Any] = {
             "station": self._station_id,
             "source": reading.source,
+            "sensor_type": reading.sensor_type,
             "ts": datetime.fromtimestamp(reading.ts, UTC).isoformat(timespec="milliseconds"),
-            "ts_quality": _published_quality(reading.ts_quality),
+            # Published as ts_src; stored as ts_quality, which also holds 'pending'.
+            "ts_src": _published_quality(reading.ts_quality),
             "values": json.loads(reading.values_json),
         }
+        if meta := json.loads(reading.meta_json):
+            payload["meta"] = meta
         if reading.ts_quality == TimeQuality.PENDING:
             # Uncorrectable on the station; include what a consumer would need to fix
             # it later from another reading of the same boot with a known time.

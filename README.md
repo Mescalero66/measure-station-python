@@ -62,7 +62,9 @@ stalls the rest of the station.
 │   ├── supervisor.py               # restart and heartbeat supervision
 │   ├── watchdog.py                 # systemd sd_notify / watchdog
 │   ├── health.py                   # periodic station self-report
-│   ├── sensors/                    # sensor drivers + registry
+│   ├── read_sensor.py              # prints one sensor's readings, for checking wiring
+│   ├── drivers/                    # hardware drivers, verbatim from drivers-repo
+│   ├── sensors/                    # sensor classes (adapters for drivers/) + registry
 │   └── uart/                       # MQ gas board: serial reader + $PMQB decoder
 └── tests/
 ```
@@ -87,7 +89,12 @@ stalls the rest of the station.
 
 **Hardware**
 
-- [MQ Gas Board](docs/mq-gas-board.md): wiring, what's published, and how readings are
+- [Air Quality Board](docs/sensors/air-quality-board.md): the ENS160 + AHT21 board's wiring,
+  published values and warm-up.
+- [CO2 Sensor](docs/sensors/co2-sensor.md): the SCD41's wiring, published values and
+  calibration.
+- [Pressure Sensor](docs/sensors/pressure-sensor.md): the BMP280's wiring and published values.
+- [MQ Gas Board](docs/sensors/mq-gas-board.md): wiring, what's published, and how readings are
   handled.
 - [MQ Gas Board UART Interface](docs/uart-interface.md): the board's `$PMQB` sentence
   specification.

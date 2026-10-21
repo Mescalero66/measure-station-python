@@ -37,7 +37,9 @@ _SCHEMA = (
     CREATE TABLE IF NOT EXISTS outbox (
         id          INTEGER PRIMARY KEY,
         source      TEXT NOT NULL,
+        sensor_type TEXT NOT NULL,
         values_json TEXT NOT NULL,
+        meta_json   TEXT NOT NULL,  -- '{}' when there's none
         ts          REAL NOT NULL,  -- best known wall-clock time (unix seconds)
         ts_quality  TEXT NOT NULL,  -- 'ntp' | 'corrected' | 'pending'
         boot_id     TEXT NOT NULL,  -- kernel boot the reading was captured in
@@ -130,7 +132,16 @@ class Outbox:
             for r in readings:
                 ts, quality = self._clock.resolve(r.timestamp, r.boot_ts)
                 rows.append(
-                    (r.source, encode_values(r.values), ts, quality, self._clock.boot_id, r.boot_ts)
+                    (
+                        r.source,
+                        r.sensor_type,
+                        encode_values(r.values),
+                        encode_values(r.meta),
+                        ts,
+                        quality,
+                        self._clock.boot_id,
+                        r.boot_ts,
+                    )
                 )
                 if r.seen is not None:
                     seen[r.seen.sensor] = r.seen.uptime_s
@@ -141,8 +152,9 @@ class Outbox:
                 with conn:
                     conn.executemany(
                         "INSERT INTO outbox "
-                        "(source, values_json, ts, ts_quality, boot_id, boot_ts) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        "(source, sensor_type, values_json, meta_json, "
+                        "ts, ts_quality, boot_id, boot_ts) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
                     conn.executemany(
@@ -173,7 +185,8 @@ class Outbox:
         with self._lock:
             cursor = self._guarded(
                 lambda conn: conn.execute(
-                    "SELECT id, source, values_json, ts, ts_quality, boot_id, boot_ts "
+                    "SELECT id, source, sensor_type, values_json, meta_json, "
+                    "ts, ts_quality, boot_id, boot_ts "
                     "FROM outbox "
                     "WHERE ts_quality != 'pending' OR boot_id != ? OR boot_ts <= ? "
                     "ORDER BY id LIMIT ?",

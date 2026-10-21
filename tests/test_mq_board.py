@@ -176,10 +176,12 @@ class TestDecoder:
         assert broadcast(decoder, 1050, {"MQ2": 26}) == []
 
         assert reading.source == "mqboard-mq2"
-        assert reading.values["uptime_s"] == 26
-        assert reading.values["gas"] == "SMK"
-        assert reading.values["baseline_tracking"] is True
-        assert reading.values["ts_basis"] == "board"
+        assert reading.sensor_type == "mq_board"
+        assert reading.values == {"concentration_ppm": 1.0}
+        assert reading.meta["gas"] == "SMK"
+        assert reading.meta["baseline_tracking"] is True
+        assert reading.meta["ts_basis"] == "board"
+        assert "uptime_s" not in reading.meta  # the board's clock: not published
         assert reading.seen == ("MQ2", 26)
         # One fresh sample with a 4 s broadcast delay: estimate is within 4 s.
         assert 1026 <= reading.boot_ts <= 1030
@@ -207,7 +209,7 @@ class TestDecoder:
         broadcast(decoder, 990, {"MQ2": 259201})
         broadcast(decoder, 1000, {"MQ2": 259226})
         (reading,) = broadcast(decoder, 1010, {"MQ2": 26})
-        assert reading.values["uptime_s"] == 26
+        assert reading.seen.uptime_s == 26
 
     def test_restart_detected_from_empty_sentences(self) -> None:
         decoder = MqBoardDecoder()
@@ -234,7 +236,7 @@ class TestDecoder:
         line = b"$PMQB,MQ4,86601,CH4,,23.19,1,5.401877*0C"
         held, fault = decoder.feed(line, at(108))  # fresh: estimate exists, both released
         assert held.values["concentration_ppm"] == 1.0
-        assert fault.values["uptime_s"] == 86601
+        assert fault.seen.uptime_s == 86601
         assert fault.values["concentration_ppm"] is None
 
     def test_falls_back_to_receipt_time_when_no_estimate_arrives(self) -> None:
@@ -242,7 +244,7 @@ class TestDecoder:
         decoder.feed(sentence("MQ2", 826), at(1000))  # first sight: not fresh
         assert decoder.check(1200) == []
         (reading,) = decoder.check(1301)
-        assert reading.values["ts_basis"] == "receipt"
+        assert reading.meta["ts_basis"] == "receipt"
         assert reading.boot_ts == 1000
 
     def test_link_down_and_stale_sensor_reporting(self) -> None:
@@ -320,7 +322,7 @@ def test_simulated_hours_every_reading_once_and_accurately_timed(drift: float) -
 
     # After the estimate has settled, timestamps are within ~1 s (uptime_s is whole seconds).
     errors = [
-        abs(r.boot_ts - board.capture_time(r.values["uptime_s"]))
+        abs(r.boot_ts - board.capture_time(r.seen.uptime_s))
         for r in emitted
         if r.boot_ts > 500.0 + 900
     ]
@@ -339,4 +341,4 @@ def test_simulated_station_restart_mid_run() -> None:
 
     for r in emitted:  # nothing recorded before the restart is emitted again
         assert r.seen.uptime_s > recorded[r.seen.sensor]
-        assert abs(r.boot_ts - board.capture_time(r.values["uptime_s"])) < 11
+        assert abs(r.boot_ts - board.capture_time(r.seen.uptime_s)) < 11

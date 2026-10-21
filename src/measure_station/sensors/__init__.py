@@ -9,14 +9,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from measure_station.sensors.base import Sensor, poll_sensor
-from measure_station.sensors.bme280_i2c import Bme280Sensor
+from measure_station.sensors.base import LatestValues, Sample, Sensor, poll_sensor
+from measure_station.sensors.bmp280_i2c import Bmp280Sensor
 from measure_station.sensors.cpu_temperature import CpuTemperatureSensor
+from measure_station.sensors.ens160_aht21_i2c import Ens160Aht21Sensor
+from measure_station.sensors.scd41_i2c import Scd41Sensor
 from measure_station.sensors.simulated import SimulatedSensor
 
 SENSOR_TYPES: dict[str, type[Sensor]] = {
-    "bme280": Bme280Sensor,
+    "bmp280": Bmp280Sensor,
     "cpu_temperature": CpuTemperatureSensor,
+    "ens160_aht21": Ens160Aht21Sensor,
+    "scd41": Scd41Sensor,
     "simulated": SimulatedSensor,
 }
 
@@ -32,7 +36,9 @@ def create_sensor(config: Mapping[str, Any]) -> Sensor:
         raise ValueError(
             f"unknown sensor type {type_name!r}; expected one of {sorted(SENSOR_TYPES)}"
         ) from None
-    return cls(**options)
+    sensor = cls(**options)
+    sensor.sensor_type = type_name
+    return sensor
 
 
-__all__ = ["SENSOR_TYPES", "Sensor", "create_sensor", "poll_sensor"]
+__all__ = ["SENSOR_TYPES", "LatestValues", "Sample", "Sensor", "create_sensor", "poll_sensor"]

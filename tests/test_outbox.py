@@ -96,6 +96,7 @@ def test_seen_markers_saved_with_readings(
         [
             Reading(
                 "mqboard-mq2",
+                "mq_board",
                 {"ppm": 1},
                 fake_time.wall,
                 fake_time.boot,
@@ -103,6 +104,7 @@ def test_seen_markers_saved_with_readings(
             ),
             Reading(
                 "mqboard-mq2",
+                "mq_board",
                 {"ppm": 2},
                 fake_time.wall,
                 fake_time.boot,
@@ -110,12 +112,13 @@ def test_seen_markers_saved_with_readings(
             ),
             Reading(
                 "mqboard-mq4",
+                "mq_board",
                 {"ppm": 3},
                 fake_time.wall,
                 fake_time.boot,
                 SeenMarker("MQ4", 51),
             ),
-            Reading("cpu", {"t": 40}, fake_time.wall, fake_time.boot),
+            Reading("cpu", "cpu_temperature", {"t": 40}, fake_time.wall, fake_time.boot),
         ]
     )
     box.close()
@@ -124,3 +127,32 @@ def test_seen_markers_saved_with_readings(
     assert reopened.load_mqboard_last_seen() == {"MQ2": 176, "MQ4": 51}
     assert reopened.count() == 4
     reopened.close()
+
+
+def test_sensor_type_survives_storage(tmp_path: Path, synced_clock: ClockState) -> None:
+    box = make_outbox(tmp_path / "outbox.sqlite3", synced_clock)
+    box.add_many(
+        [
+            Reading("air-quality", "ens160_aht21", {"aqi": 2}),
+            Reading("outdoor", "mcp9808", {"temperature_c": 14.06}),
+        ]
+    )
+    stored = box.fetch_batch(10)
+    assert [(r.source, r.sensor_type) for r in stored] == [
+        ("air-quality", "ens160_aht21"),
+        ("outdoor", "mcp9808"),
+    ]
+
+
+def test_meta_survives_storage(tmp_path: Path, synced_clock: ClockState) -> None:
+    box = make_outbox(tmp_path / "outbox.sqlite3", synced_clock)
+    box.add_many(
+        [
+            Reading("co2", "scd41", {"co2_ppm": 500}, meta={"comp_src": "alt"}),
+            Reading("cpu", "cpu_temperature", {"temperature_c": 48.3}),
+        ]
+    )
+    assert [(r.values_json, r.meta_json) for r in box.fetch_batch(10)] == [
+        ('{"co2_ppm":500}', '{"comp_src":"alt"}'),
+        ('{"temperature_c":48.3}', "{}"),
+    ]

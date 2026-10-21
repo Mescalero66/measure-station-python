@@ -1,7 +1,7 @@
 # MQ Gas Board
 
 The MQ board (six MQ gas sensors on an ESP32-S3) broadcasts NMEA-style `$PMQB`
-sentences, as specified in [MQ Gas Board UART Interface](uart-interface.md). It re-sends
+sentences, as specified in [MQ Gas Board UART Interface](../uart-interface.md). It re-sends
 the latest reading of every sensor about every 10s and reads each sensor every 150s, so
 most sentences are repeats.
 
@@ -22,47 +22,51 @@ One MQTT source per sensor: `<MQBOARD_SOURCE_PREFIX><sensor>`, e.g.
 {
   "station": "pi-01",
   "source": "mqboard-mq4",
+  "sensor_type": "mq_board",
   "ts": "2026-10-13T09:40:01.000+00:00",
-  "ts_quality": "ntp",
+  "ts_src": "ntp",
   "values": {
+    "concentration_ppm": 17.85
+  },
+  "meta": {
     "gas": "CH4",
-    "concentration_ppm": 17.85,
     "temperature_c": 23.19,
     "baseline_tracking": true,
     "r0_kohm": 5.401877,
-    "uptime_s": 86451,
     "ts_basis": "board"
   }
 }
 ```
 
-(Formatted here for reading; the station sends it as compact JSON, about 220 bytes.)
+(Formatted here for reading; the station sends it as compact JSON, about 260 bytes.)
 
-`values` passes the board's sentence fields straight through, under the board's own
-names (see [MQ Gas Board UART Interface](uart-interface.md#fields) for the full
-definitions). The station adds only `ts_basis`:
+The station passes the board's sentence fields through under the board's own names
+(see [MQ Gas Board UART Interface](../uart-interface.md#fields) for the full
+definitions). It decides only which section each field goes in, adds `ts_basis`, and
+leaves out `uptime_s`:
 
-| Key | From | Meaning |
-|---|---|---|
-| `gas` | board | Target gas the ppm is calibrated for |
-| `concentration_ppm` | board | Concentration of the target gas, in ppm |
-| `temperature_c` | board | Temperature used to compensate the reading, in °C |
-| `baseline_tracking` | board | `true`: R0 is an established clean-air baseline. `false`: provisional boot calibration |
-| `r0_kohm` | board | Clean-air reference resistance this ppm was calculated with, in kΩ |
-| `uptime_s` | board | Board uptime in seconds when the reading was taken; identifies the reading |
-| `ts_basis` | station | `board`: `ts` was derived from `uptime_s`. `receipt`: fallback, timestamped on arrival |
+| Key | Section | From | Meaning |
+|---|---|---|---|
+| `concentration_ppm` | `values` | board | Concentration of the target gas, in ppm |
+| `gas` | `meta` | board | Target gas the ppm is calibrated for |
+| `temperature_c` | `meta` | board | Temperature used to compensate the reading, in °C |
+| `baseline_tracking` | `meta` | board | `true`: R0 is an established clean-air baseline. `false`: provisional boot calibration |
+| `r0_kohm` | `meta` | board | Clean-air reference resistance this ppm was calculated with, in kΩ |
+| `ts_basis` | `meta` | station | `board`: `ts` was derived from the board's uptime. `receipt`: fallback, timestamped on arrival |
+| `uptime_s` | not published | board | Board uptime when the reading was taken. The station uses it internally (see below) |
 
-`ts` (top level) is the reading's UTC time, worked out by the station from `uptime_s`.
+`ts` (top level) is the reading's UTC time, worked out by the station from the board's
+`uptime_s`.
 
 - **Values are as the board sent them.** Empty fields become `null` (never 0).
   `nan`/`inf` also become `null`.
-- **Read faults are published.** A failed read (new `uptime_s`, `concentration_ppm: null`) is sent,
-  not dropped, so consumers can see sensor faults.
+- **Read faults are published.** A failed read (`concentration_ppm: null`) is sent, not
+  dropped, so consumers can see sensor faults.
 - **The station doesn't interpret the data.** Deciding whether a reading with
   `baseline_tracking: false` is provisional, or whether `r0_kohm` = 10.0 is a placeholder, is
   left to consumers. So is recomputing ppm against another R0.
-- **De-duplication key.** `uptime_s` identifies the reading, so consumers can
-  de-duplicate on `(source, uptime_s)` within one board boot.
+- **De-duplication key:** `(station, source, ts)`, as for every source. Each reading's
+  `ts` is fixed when it's stored, so a re-delivered message has the same `ts`.
 
 **How Readings Are Handled**
 

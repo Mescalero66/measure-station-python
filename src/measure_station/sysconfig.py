@@ -125,12 +125,12 @@ NTP_SERVERS: list[str] = _env_list("NTP_SERVERS") or []
 
 # Until NTP has synchronised the clock after a boot, readings are stored with their
 # seconds-since-boot and held back from MQTT. On sync they are back-dated to accurate
-# timestamps (published with "ts_quality": "corrected") and released.
+# timestamps (published with "ts_src": "corrected") and released.
 #
 # How often to check for NTP synchronisation while unsynchronised.
 TIME_SYNC_POLL_S: float = 10.0
 # Longest a reading is held waiting for a time correction. After this it is published
-# anyway, with its unsynchronised timestamp ("ts_quality": "estimated"). This bounds
+# anyway, with its unsynchronised timestamp ("ts_src": "estimated"). This bounds
 # the delivery delay at sites where NTP is unreachable even though the broker isn't.
 # 0 = never hold (publish immediately; pre-sync readings are always "estimated").
 TIME_SYNC_MAX_HOLD_S: float = 24 * 3600
@@ -183,12 +183,38 @@ SENSORS: list[dict[str, Any]] = [
         "enabled": True,
     },
     {
-        "type": "bme280",
-        "name": "ambient",
-        "interval_s": 30,
+        # ENS160 + AHT21 air quality board (docs/sensors/air-quality-board.md).
+        "type": "ens160_aht21",
+        "name": "air-quality",
+        "interval_s": 60,
         "i2c_bus": 1,
-        "address": 0x76,
-        "enabled": False,
+        "ens160_address": None,  # 0x53 (ADD high) or 0x52 (ADD low); None finds it
+        "enabled": True,
+    },
+    {
+        # BMP280 barometric pressure sensor (docs/sensors/pressure-sensor.md).
+        "type": "bmp280",
+        "name": "barometer",
+        "interval_s": 60,
+        "i2c_bus": 1,
+        "address": 0x76,  # 0x76 (SDO low, most boards) or 0x77 (SDO high)
+        "enabled": True,
+    },
+    {
+        # SCD41 CO2 sensor (docs/sensors/co2-sensor.md). Fixed I2C address 0x62.
+        "type": "scd41",
+        "name": "co2",
+        "interval_s": 60,
+        "i2c_bus": 1,
+        # Pressure compensation: the live pressure_hpa of pressure_source (a sensor name,
+        # or None), falling back to the standard pressure at altitude_m (0-3000 m above
+        # sea level) when that's missing or out of date.
+        "pressure_source": "barometer",
+        "altitude_m": 0,
+        # Applied at every start, in the sensor's RAM (its EEPROM is never written).
+        "temperature_offset_c": 4.0,  # its self-heating; set once mounted in its enclosure
+        "asc_enabled": True,  # automatic self-calibration: needs fresh air weekly
+        "enabled": True,
     },
     {
         # Generates fake data. Useful for exercising the pipeline on a dev machine.

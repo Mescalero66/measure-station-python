@@ -60,3 +60,17 @@ def test_mqboard_sources_must_not_collide_with_sensors() -> None:
 def test_mqboard_prefix_must_be_topic_safe() -> None:
     cfg = _config(STATION_ID="pi-01", MQBOARD_ENABLED=True, MQBOARD_SOURCE_PREFIX="mq/board-")
     assert any("must match" in e for e in validate_config(cfg))
+
+
+def test_pressure_source_must_be_another_enabled_sensor() -> None:
+    co2 = {"type": "scd41", "name": "co2", "interval_s": 60}
+    barometer = {"type": "bmp280", "name": "barometer", "interval_s": 60}
+    ok = _config(STATION_ID="pi-01", SENSORS=[co2 | {"pressure_source": "barometer"}, barometer])
+    assert validate_config(ok) == []
+    for sensors in (
+        [co2 | {"pressure_source": "barometr"}, barometer],  # misspelt
+        [co2 | {"pressure_source": "barometer"}, barometer | {"enabled": False}],
+        [co2 | {"pressure_source": "co2"}],  # itself
+    ):
+        errors = validate_config(_config(STATION_ID="pi-01", SENSORS=sensors))
+        assert any("isn't another enabled sensor" in e for e in errors), sensors

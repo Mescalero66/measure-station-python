@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 ADDRESS = "PMQB"
 # In broadcast order. Sentences with any other name are ignored, as the spec requires.
 KNOWN_SENSORS = ("MQ2", "MQ4", "MQ5", "MQ8", "MQ135", "MQ7")
+# Published with every reading; the source (e.g. mqboard-mq4) says which MQ sensor.
+SENSOR_TYPE = "mq_board"
 
 _CHECKSUM = re.compile(r"[0-9A-Fa-f]{2}")
 
@@ -339,14 +341,15 @@ class MqBoardDecoder:
         s = held.sentence
         return Reading(
             source=self.source_for(s.name),
-            # The board's fields, under the board's own names, plus ts_basis.
-            values={
+            sensor_type=SENSOR_TYPE,
+            # The board's fields, under the board's own names, plus ts_basis. uptime_s
+            # isn't published: it's only the board's clock, kept in `seen` below.
+            values={"concentration_ppm": s.concentration_ppm},
+            meta={
                 "gas": s.gas,
-                "concentration_ppm": s.concentration_ppm,
                 "temperature_c": s.temperature_c,
                 "baseline_tracking": s.baseline_tracking,
                 "r0_kohm": s.r0_kohm,
-                "uptime_s": s.uptime_s,
                 "ts_basis": basis,
             },
             timestamp=received.wall_ts - (received.boot_ts - captured),

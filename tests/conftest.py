@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -31,7 +34,11 @@ class FakeTime:
 
     def reading(self, source: str = "s", **values: float) -> Reading:
         return Reading(
-            source=source, values=values or {"v": 1.0}, timestamp=self.wall, boot_ts=self.boot
+            source=source,
+            sensor_type="simulated",
+            values=values or {"v": 1.0},
+            timestamp=self.wall,
+            boot_ts=self.boot,
         )
 
 
@@ -53,3 +60,43 @@ def make_outbox(path: Path, clock: ClockState, **kwargs) -> Outbox:
     box = Outbox(path, clock=clock, **options)
     box.open()
     return box
+
+
+# --------------------------------------------------------------------------- fake I2C
+# Drivers from drivers-repo talk to the bus through smbus2's i2c_rdwr. These replace
+# smbus2 so the real driver can run against a fake chip, without hardware or smbus2.
+
+
+class FakeMsg:
+    """An smbus2 i2c_msg: the bus fills in ``data`` for a read."""
+
+    def __init__(self, addr: int, data: bytes, is_read: bool) -> None:
+        self.addr, self.data, self.is_read = addr, bytearray(data), is_read
+
+    def __iter__(self):
+        return iter(self.data)
+
+    def __bytes__(self) -> bytes:
+        return bytes(self.data)
+
+
+class FakeI2cMsg:
+    @staticmethod
+    def read(addr: int, n: int) -> FakeMsg:
+        return FakeMsg(addr, bytes(n), True)
+
+    @staticmethod
+    def write(addr: int, data) -> FakeMsg:
+        return FakeMsg(addr, bytes(data), False)
+
+
+def install_fake_smbus2(monkeypatch: pytest.MonkeyPatch, bus_class: type, driver: str) -> None:
+    """Make ``measure_station.drivers.<driver>`` use ``bus_class`` as its SMBus."""
+    fake = types.ModuleType("smbus2")
+    fake.SMBus = bus_class
+    fake.i2c_msg = FakeI2cMsg
+    monkeypatch.setitem(sys.modules, "smbus2", fake)
+    module = importlib.import_module(f"measure_station.drivers.{driver}")
+    # Also when the driver was already imported, e.g. with the real smbus2 on a Pi.
+    monkeypatch.setattr(module, "SMBus", bus_class)
+    monkeypatch.setattr(module, "i2c_msg", FakeI2cMsg)

@@ -4,8 +4,9 @@
 # Usage (from a checkout, ideally at /opt/measure-station):
 #     sudo ./deploy/install.sh
 #
-# Safe to re-run: every step is idempotent. Set EXTRAS="" to skip optional
-# sensor drivers, e.g.  sudo EXTRAS="" ./deploy/install.sh
+# Safe to re-run: every step is idempotent. EXTRAS lists the optional sensor driver
+# dependencies to install (comma-separated); it defaults to those of the sensors enabled
+# in sysconfig.py, e.g.  sudo EXTRAS="ens160_aht21,bh1750" ./deploy/install.sh
 set -euo pipefail
 
 APP_NAME=measure-station
@@ -13,7 +14,7 @@ APP_USER=measure-station
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$APP_DIR/.venv"
 ETC_DIR="/etc/$APP_NAME"
-EXTRAS="${EXTRAS-bme280}"
+EXTRAS="${EXTRAS-ens160_aht21,bmp280,scd41}"
 
 log() { printf '\n==> %s\n' "$*"; }
 

@@ -8,7 +8,7 @@ board only sends; it accepts no commands.
 This is the part of the board's interface specification (`INTERFACE.md` in
 [mq-board-micropython](https://github.com/Mescalero66/mq-board-micropython)) that the
 station relies on. If the two disagree, the board's specification wins. For how the station
-uses this interface, see [MQ Gas Board](mq-gas-board.md).
+uses this interface, see [MQ Gas Board](sensors/mq-gas-board.md).
 
 ## Physical Layer
 
@@ -105,7 +105,7 @@ All fields other than `name` and `gas` describe a single reading and were captur
 together at the moment it was taken.
 
 The station publishes these fields under the same names (see
-[MQ Gas Board](mq-gas-board.md)).
+[MQ Gas Board](sensors/mq-gas-board.md)).
 
 ### `name`
 

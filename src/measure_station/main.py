@@ -25,7 +25,7 @@ from measure_station.models import MessageEncoder, Reading
 from measure_station.ntp_setup import invalid_servers
 from measure_station.publisher import MqttPublisher, MqttSettings
 from measure_station.recorder import record_readings
-from measure_station.sensors import create_sensor, poll_sensor
+from measure_station.sensors import LatestValues, create_sensor, poll_sensor
 from measure_station.storage import Outbox
 from measure_station.supervisor import Supervisor
 from measure_station.timesync import monitor_clock_sync
@@ -170,8 +170,10 @@ def build_supervisor(
         stale_after_s=stale_s,
     )
 
+    latest = LatestValues()  # lets a sensor use another's readings
     for sensor_cfg in _enabled(cfg.SENSORS):
         sensor = create_sensor(sensor_cfg)
+        sensor.latest_values = latest
         supervisor.add(
             f"sensor:{sensor.name}",
             functools.partial(poll_sensor, sensor, queue, read_timeout_s=cfg.SENSOR_READ_TIMEOUT_S),
@@ -233,11 +235,19 @@ def validate_config(cfg: Any) -> list[str]:
         errors.append(f"NTP_SERVERS contains invalid host names or addresses: {bad_ntp!r}")
 
     sources = [cfg.HEALTH_SOURCE_NAME]
+    sensors = []
     for entry in _enabled(cfg.SENSORS):
         try:
-            sources.append(create_sensor(entry).name)
+            sensors.append(create_sensor(entry))
         except (TypeError, ValueError) as exc:
             errors.append(f"SENSORS entry {entry!r}: {exc}")
+    sources.extend(sensor.name for sensor in sensors)
+    for sensor in sensors:
+        for used in sensor.uses_sources():
+            if used == sensor.name or used not in (s.name for s in sensors):
+                errors.append(
+                    f"sensor {sensor.name!r} uses {used!r}, which isn't another enabled sensor"
+                )
     if cfg.MQBOARD_ENABLED:
         sources.extend(_mqboard_decoder(cfg, {}).sources())
 
