@@ -93,6 +93,7 @@ stalls the rest of the station.
   published values and warm-up.
 - [CO2 Sensor](docs/sensors/co2-sensor.md): the SCD41's wiring, published values and
   calibration.
+- [Light Sensor](docs/sensors/light-sensor.md): the BH1750's wiring, range and settings.
 - [Pressure Sensor](docs/sensors/pressure-sensor.md): the BMP280's wiring and published values.
 - [MQ Gas Board](docs/sensors/mq-gas-board.md): wiring, what's published, and how readings are
   handled.

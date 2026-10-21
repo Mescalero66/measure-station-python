@@ -217,6 +217,19 @@ SENSORS: list[dict[str, Any]] = [
         "enabled": True,
     },
     {
+        # BH1750 ambient light sensor (docs/sensors/light-sensor.md).
+        "type": "bh1750",
+        "name": "light",
+        "interval_s": 60,
+        "i2c_bus": 1,
+        "address": 0x23,  # 0x23 (ADDR low or open) or 0x5C (ADDR high)
+        # The fraction of light its cover lets through (0-1); readings are divided by it.
+        # 0.9 is an estimate for clear plastic (acrylic ~0.92, polycarbonate ~0.88);
+        # measure it against a lux meter if one is available. The range is automatic.
+        "transmittance": 0.9,
+        "enabled": True,
+    },
+    {
         # Generates fake data. Useful for exercising the pipeline on a dev machine.
         "type": "simulated",
         "name": "simulated",

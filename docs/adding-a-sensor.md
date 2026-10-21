@@ -23,12 +23,13 @@ existing drivers:
 src/measure_station/sensors/
 ├── __init__.py          # SENSOR_TYPES registry
 ├── base.py              # the Sensor base class and the polling loop
+├── bh1750_i2c.py        # BH1750 light sensor (the worked example below)
 ├── bmp280_i2c.py        # BMP280 pressure sensor (adapter for an asyncio driver)
 ├── cpu_temperature.py   # Pi SoC temperature (no hardware needed)
 ├── ens160_aht21_i2c.py  # ENS160 + AHT21 air quality board (adapter, see below)
 ├── scd41_i2c.py         # SCD41 CO2 sensor (adapter for an asyncio driver)
 ├── simulated.py         # fake data for development
-└── bh1750_i2c.py        # <- your new driver
+└── sht31_i2c.py         # <- your new driver
 ```
 
 - **Module name:** describe the part and bus, e.g. `bh1750_i2c.py`, `sht31_i2c.py`,
@@ -214,7 +215,7 @@ SENSORS: list[dict[str, Any]] = [
     # ...existing sensors...
     {
         "type": "bh1750",  # the SENSOR_TYPES key, published as sensor_type
-        "name": "ambient-light",  # the MQTT source name (see below)
+        "name": "light",  # the MQTT source name (see below)
         "interval_s": 30,  # seconds between readings
         "address": 0x23,  # driver option, passed to __init__
         "enabled": True,  # False keeps the entry but doesn't start it
@@ -234,7 +235,7 @@ Then restart the service: `sudo systemctl restart measure-station`.
   and from the MQ board's sources (`mqboard-mq2`, `mqboard-mq4`...).
 - **Not `status`**, which is reserved for the station's online/offline topic.
 - **Name it for what it measures or where it is**, not the part number: `ambient`,
-  `enclosure`, `ambient-light`. Then swapping the part for a different model doesn't
+  `enclosure`, `light`. Then swapping the part for a different model doesn't
   change the topic.
 - **Keep it stable.** Renaming a sensor starts a new data series for consumers.
 
@@ -320,8 +321,8 @@ recorder               writes to the SQLite outbox (grouped, see SD card wear)
 publisher              sends to the broker; deletes from the outbox only on PUBACK
    │
    ▼
-measure-station/pi-01/ambient-light
-{"station": "pi-01", "source": "ambient-light", "sensor_type": "bh1750",
+measure-station/pi-01/light
+{"station": "pi-01", "source": "light", "sensor_type": "bh1750",
  "ts": "2026-10-13T09:40:01.000+00:00", "ts_src": "ntp",
  "values": {"illuminance_lux": 412.5}}
 ```
@@ -344,94 +345,102 @@ allow) so `read()` returns quickly with the latest value.
 
 ## Worked Example: BH1750 Light Sensor
 
-The BH1750 is an I2C ambient light sensor (address `0x23`, or `0x5C` with its ADDR pin
-high). This driver puts it in continuous high-resolution mode and reads illuminance in
-lux.
+The BH1750 is an I2C ambient light sensor, with an `asyncio` driver from drivers-repo
+(`Lux-BH1750-python/bh1750.py`). Adding it took these files; see
+[Light Sensor](sensors/light-sensor.md) for the sensor itself.
 
-`src/measure_station/sensors/bh1750_i2c.py`:
+| File | Change |
+|---|---|
+| `src/measure_station/drivers/bh1750.py` | The driver, copied verbatim |
+| `src/measure_station/sensors/bh1750_i2c.py` | The adapter, below |
+| `src/measure_station/sensors/__init__.py` | `"bh1750": Bh1750Sensor` in `SENSOR_TYPES` |
+| `src/measure_station/sysconfig.py` | The `light` entry in `SENSORS` |
+| `pyproject.toml`, `deploy/install.sh` | The `bh1750` extra, and in the installer's default `EXTRAS` |
+| `tests/test_bh1750.py` | Tests against a fake chip (see [Testing](#testing)) |
+| `docs/sensors/light-sensor.md` | Its page, listed in the README |
+
+The heart of the adapter (option checks and comments left out; see the file). It
+auto-ranges: it measures again, more finely, when the first reading is low:
 
 ```python
-"""ROHM BH1750 ambient light sensor on I2C.
-
-Values:
-    illuminance_lux: illuminance in lux, 0-65535 (1 lux resolution in this mode).
-
-Requires: pip install -e ".[bh1750]"   (smbus2)
-Wiring:   SDA -> GPIO2 (pin 3), SCL -> GPIO3 (pin 5), VCC -> 3.3 V, GND.
-"""
-
-from __future__ import annotations
-
-import time
-from typing import Any
-
-from measure_station.sensors.base import Sample, Sensor
-
-_POWER_ON = 0x01
-_CONTINUOUS_HIGH_RES = 0x10  # 1 lux resolution, ~120 ms per measurement
-
-
-def lux_from_raw(high: int, low: int) -> float:
-    """Convert the sensor's two result bytes to lux (datasheet: count / 1.2)."""
-    return round(((high << 8) | low) / 1.2, 1)
-
-
 class Bh1750Sensor(Sensor):
-    def __init__(self, name: str, interval_s: float, i2c_bus: int = 1, address: int = 0x23):
+    def __init__(self, name, interval_s, i2c_bus=1, address=0x23, transmittance=1.0):
         super().__init__(name, interval_s)  # no hardware access here
-        self._i2c_bus = i2c_bus
-        self._address = address
-        self._bus: Any = None
+        ...
 
     def open(self) -> None:
-        import smbus2  # imported here so the station runs without it installed
+        # Imported here: the driver imports smbus2 at the top of the module.
+        from measure_station.drivers.bh1750 import BH1750
 
-        self._bus = smbus2.SMBus(self._i2c_bus)
-        self._bus.write_byte(self._address, _POWER_ON)
-        self._bus.write_byte(self._address, _CONTINUOUS_HIGH_RES)
-        time.sleep(0.2)  # let the first measurement complete
+        self._bh = BH1750(self._i2c_bus, self._address, self._transmittance)
+        asyncio.run(self._bh.power_on())  # raises if nothing answers at the address
 
     def read(self) -> Sample:
-        import smbus2
+        lux, range_ = asyncio.run(self._auto_range())
+        digits = 2 if range_ == "lo" else 1
+        return Sample({"illuminance_lux": round(lux, digits)}, meta={"range": range_})
 
-        message = smbus2.i2c_msg.read(self._address, 2)
-        self._bus.i2c_rdwr(message)  # raises OSError if the sensor doesn't answer
-        high, low = list(message)
-        return Sample({"illuminance_lux": lux_from_raw(high, low)})
+    async def _auto_range(self) -> tuple[float, str]:
+        lux, _ = await self._measure(*_HI)
+        if lux >= _LO_BELOW_LUX:
+            return lux, "hi"
+        lo_lux, lo_full_scale = await self._measure(*_LO)
+        return (lux, "hi") if lo_full_scale else (lo_lux, "lo")
+
+    async def _measure(self, resolution: int, mtreg: int) -> tuple[float, bool]:
+        bh = self._bh
+        await bh.power_on()
+        await bh.set_mtreg(mtreg)  # every time: a brown-out would have reset it
+        lux = await bh.measure(resolution)  # one-time: then the chip sleeps
+        return lux, round(lux / bh.lux_per_count(resolution)) >= _FULL_SCALE
 
     def close(self) -> None:
-        if self._bus is not None:
-            self._bus.close()
-            self._bus = None
+        if self._bh is not None:  # synchronous: runs on the event loop thread
+            self._bh.close()
+            self._bh = None
 ```
-
-Then:
-- **Register it:** add `"bh1750": Bh1750Sensor` to `SENSOR_TYPES`.
-- **Configure it:** add the `SENSORS` entry shown in
-  [Configure the Sensor](#3-configure-the-sensor).
-- **Dependency:** add the `bh1750` extra to `pyproject.toml`.
 
 ## Testing
 
-**Unit tests**, in `tests/test_<module>.py`, run on any machine: no hardware needed.
-Test the conversion logic directly, and check that the configuration is accepted:
+**Unit tests**, in `tests/test_<module>.py`, run on any machine: no hardware or
+`smbus2` needed. Test the adapter with your **real driver** against a fake chip: the
+helpers in `tests/conftest.py` replace `smbus2`, so each test file only describes the
+chip. Model the chip from its datasheet, and check the model against the datasheet's
+worked example where there is one, so expected results come from the manufacturer:
 
 ```python
-from measure_station.sensors import create_sensor
-from measure_station.sensors.bh1750_i2c import lux_from_raw
+from conftest import FakeMsg, install_fake_smbus2
 
 
-def test_lux_conversion() -> None:
-    assert lux_from_raw(0x01, 0x90) == 333.3  # 400 counts / 1.2
+class FakeBh1750Bus:
+    """A BH1750 at 0x23: lux * 1.2 * MTreg / 69 counts (p11), clipped at 65535."""
+
+    lux = 30000.0  # the light the test shows the chip
+
+    def __init__(self, bus: int) -> None:
+        self.mtreg, self.raw = 69, 0
+
+    def i2c_rdwr(self, *messages: FakeMsg) -> None:
+        for m in messages:
+            if m.addr != 0x23:
+                raise OSError(121, "Remote I/O error")  # nothing at that address
+            if m.is_read:
+                m.data[:] = self.raw.to_bytes(2, "big")
+            else:
+                ...  # track the MTreg and measurement opcodes, and set self.raw
 
 
-def test_config_creates_sensor() -> None:
-    sensor = create_sensor({"type": "bh1750", "name": "ambient-light", "interval_s": 30})
-    assert sensor.name == "ambient-light"
+def test_bright_light(monkeypatch) -> None:
+    install_fake_smbus2(monkeypatch, FakeBh1750Bus, "bh1750")
+    sensor = create_sensor({"type": "bh1750", "name": "light", "interval_s": 60})
+    sensor.open()
+    sample = sensor.read()
+    assert sample.meta == {"range": "hi"}
+    assert sample.values["illuminance_lux"] == pytest.approx(30000, abs=1.9)
 ```
 
-Run them with `.venv/bin/pytest`. Keeping hardware access in `open()`/`read()`, and the
-maths in plain functions, is what makes this possible.
+Also test the failure paths: a missing chip, bad options, and recovery from a reset.
+Run the tests with `.venv/Scripts/python -m pytest` (`.venv/bin/pytest` on Linux).
 
 **On the Pi:**
 
@@ -443,11 +452,11 @@ maths in plain functions, is what makes this possible.
    journalctl -u measure-station -f
    ```
 
-   Look for `Sensor Bh1750Sensor(name='ambient-light', ...) started`. A
-   `Task 'sensor:ambient-light' crashed` traceback means `open()` or `read()` raised; the
+   Look for `Sensor Bh1750Sensor(name='light', ...) started`. A
+   `Task 'sensor:light' crashed` traceback means `open()` or `read()` raised; the
    message says why, and the station retries on its own.
 3. Watch the messages arrive at the broker:
-   `mosquitto_sub -h <broker> -t 'measure-station/+/ambient-light' -v`.
+   `mosquitto_sub -h <broker> -t 'measure-station/+/light' -v`.
 
 ## Checklist
 
