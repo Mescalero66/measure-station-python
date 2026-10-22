@@ -17,7 +17,9 @@ dependencies = [
 # Sensor driver libraries are optional, so the package installs (and tests run) anywhere.
 bh1750 = ["smbus2>=0.4"]
 bmp280 = ["smbus2>=0.4"]
+cht8305 = ["smbus2>=0.4"]
 ens160_aht21 = ["smbus2>=0.4"]
+mcp9808 = ["smbus2>=0.4"]
 scd41 = ["smbus2>=0.4"]
 sen62 = ["smbus2>=0.4"]
 dev = [

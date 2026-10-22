@@ -93,10 +93,14 @@ stalls the rest of the station.
   published values and warm-up.
 - [CO2 Sensor](docs/sensors/co2-sensor.md): the SCD41's wiring, published values and
   calibration.
+- [Humidity Sensor](docs/sensors/humidity-sensor.md): the CHT8305 probe's wiring, accuracy
+  and probe version.
 - [Light Sensor](docs/sensors/light-sensor.md): the BH1750's wiring, range and settings.
 - [Particulate Sensor](docs/sensors/particulate-sensor.md): the SEN62's wiring, published
   values, status flags and operating limits.
 - [Pressure Sensor](docs/sensors/pressure-sensor.md): the BMP280's wiring and published values.
+- [Temperature Sensor](docs/sensors/temperature-sensor.md): the MCP9808's wiring, accuracy and
+  why it sleeps between readings.
 - [MQ Gas Board](docs/sensors/mq-gas-board.md): wiring, what's published, and how readings are
   handled.
 - [MQ Gas Board UART Interface](docs/uart-interface.md): the board's `$PMQB` sentence

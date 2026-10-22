@@ -25,8 +25,10 @@ src/measure_station/sensors/
 ├── base.py              # the Sensor base class and the polling loop
 ├── bh1750_i2c.py        # BH1750 light sensor (the worked example below)
 ├── bmp280_i2c.py        # BMP280 pressure sensor (adapter for an asyncio driver)
+├── cht8305_i2c.py       # CHT8305 temperature and humidity probe (adapter for an asyncio driver)
 ├── cpu_temperature.py   # Pi SoC temperature (no hardware needed)
 ├── ens160_aht21_i2c.py  # ENS160 + AHT21 air quality board (adapter, see below)
+├── mcp9808_i2c.py       # MCP9808 temperature sensor (adapter for an asyncio driver)
 ├── scd41_i2c.py         # SCD41 CO2 sensor (adapter for an asyncio driver)
 ├── sen62_i2c.py         # SEN62 particulate matter sensor (adapter for an asyncio driver)
 ├── simulated.py         # fake data for development

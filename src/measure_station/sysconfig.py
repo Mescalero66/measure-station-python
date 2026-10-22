@@ -243,6 +243,28 @@ SENSORS: list[dict[str, Any]] = [
         "enabled": True,
     },
     {
+        # MCP9808 precision temperature sensor (docs/sensors/temperature-sensor.md). It
+        # sleeps between readings, waking for one 0.3 s measurement each time.
+        "type": "mcp9808",
+        "name": "temperature",
+        "interval_s": 60,
+        "i2c_bus": 1,
+        "address": 0x1F,  # 0x18-0x1F: 0x1F with A0-A2 open (DFRobot board); see the docs
+        "enabled": True,
+    },
+    {
+        # CHT8305 temperature and humidity probe (docs/sensors/humidity-sensor.md). Fixed
+        # I2C address 0x40. Each reading is one 11 ms conversion; it idles in between.
+        "type": "cht8305",
+        "name": "humidity",
+        "interval_s": 60,
+        "i2c_bus": 1,
+        # Run its heater from one reading to the next this often (hours; None = never),
+        # to drive off moisture. The reading after waits up to 40 s for it to cool.
+        "heater_interval_h": 24,
+        "enabled": True,
+    },
+    {
         # Generates fake data. Useful for exercising the pipeline on a dev machine.
         "type": "simulated",
         "name": "simulated",

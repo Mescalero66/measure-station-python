@@ -12,8 +12,10 @@ from typing import Any
 from measure_station.sensors.base import LatestValues, Sample, Sensor, poll_sensor
 from measure_station.sensors.bh1750_i2c import Bh1750Sensor
 from measure_station.sensors.bmp280_i2c import Bmp280Sensor
+from measure_station.sensors.cht8305_i2c import Cht8305Sensor
 from measure_station.sensors.cpu_temperature import CpuTemperatureSensor
 from measure_station.sensors.ens160_aht21_i2c import Ens160Aht21Sensor
+from measure_station.sensors.mcp9808_i2c import Mcp9808Sensor
 from measure_station.sensors.scd41_i2c import Scd41Sensor
 from measure_station.sensors.sen62_i2c import Sen62Sensor
 from measure_station.sensors.simulated import SimulatedSensor
@@ -21,8 +23,10 @@ from measure_station.sensors.simulated import SimulatedSensor
 SENSOR_TYPES: dict[str, type[Sensor]] = {
     "bh1750": Bh1750Sensor,
     "bmp280": Bmp280Sensor,
+    "cht8305": Cht8305Sensor,
     "cpu_temperature": CpuTemperatureSensor,
     "ens160_aht21": Ens160Aht21Sensor,
+    "mcp9808": Mcp9808Sensor,
     "scd41": Scd41Sensor,
     "sen62": Sen62Sensor,
     "simulated": SimulatedSensor,

@@ -82,7 +82,7 @@ One reading every `interval_s` (60 s by default), on
 - **`meta`'s `temperature_c` and `humidity_pct` aren't room conditions.** They are
   measured next to the ENS160's heater, so they read warmer and drier than the room.
   They're published because they're the compensation the ENS160 used for this reading.
-  Measure room conditions with a separate sensor.
+  For the air's humidity, use the [Humidity Sensor](humidity-sensor.md).
 
 **How Readings Are Handled**
 

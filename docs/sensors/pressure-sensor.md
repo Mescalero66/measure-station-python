@@ -58,7 +58,8 @@ One reading every `interval_s` (60 s by default), on
 - **The [CO2 Sensor](co2-sensor.md) uses this pressure** to compensate its readings
   (its `pressure_source`). While this sensor is down, it falls back to its altitude.
 - **`meta`'s `temperature_c` reads a little above the air temperature**, because of
-  self-heating on the board. Use a dedicated sensor for air temperature.
+  self-heating on the board. For air temperature, use the
+  [Temperature Sensor](temperature-sensor.md).
 
 **How Readings Are Handled**
 
