@@ -230,6 +230,19 @@ SENSORS: list[dict[str, Any]] = [
         "enabled": True,
     },
     {
+        # SEN62 particulate matter sensor (docs/sensors/particulate-sensor.md). Fixed I2C
+        # address 0x6B. It measures continuously (fan and laser always on); each reading
+        # is its latest 1-second result.
+        "type": "sen62",
+        "name": "particulates",
+        "interval_s": 60,
+        "i2c_bus": 1,
+        # Blow the dust out of its fan this often (hours; None = never). That reading
+        # takes about 42 s instead of 1 s, but is still on time and settled.
+        "fan_cleaning_interval_h": 24,
+        "enabled": True,
+    },
+    {
         # Generates fake data. Useful for exercising the pipeline on a dev machine.
         "type": "simulated",
         "name": "simulated",

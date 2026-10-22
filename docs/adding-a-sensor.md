@@ -28,6 +28,7 @@ src/measure_station/sensors/
 ├── cpu_temperature.py   # Pi SoC temperature (no hardware needed)
 ├── ens160_aht21_i2c.py  # ENS160 + AHT21 air quality board (adapter, see below)
 ├── scd41_i2c.py         # SCD41 CO2 sensor (adapter for an asyncio driver)
+├── sen62_i2c.py         # SEN62 particulate matter sensor (adapter for an asyncio driver)
 ├── simulated.py         # fake data for development
 └── sht31_i2c.py         # <- your new driver
 ```
@@ -98,7 +99,9 @@ keyword arguments. Give each one a sensible default, e.g. `i2c_bus=1, address=0x
 - **Return `None` for a single missing value** when the rest of the reading is still
   good. It's published as `null`.
 - **Stay within `SENSOR_READ_TIMEOUT_S`** (10 s). `open()` and each `read()` are
-  abandoned and treated as failures if they take longer.
+  abandoned and treated as failures if they take longer. A sensor whose next `read()`
+  does slow maintenance can allow itself more time for that read by overriding
+  `read_timeout_s()` (the SEN62's daily fan cleaning, in `sen62_i2c.py`).
 - **Import hardware libraries inside `open()`**, not at the top of the module, so the
   station (and its tests) still run on machines without them.
 
@@ -167,6 +170,7 @@ they carry both the **type of measurement** and the **unit**:
 | Pressure | hPa | `_hpa` | `pressure_hpa` |
 | Gas concentration | ppm | `_ppm` | `co2_ppm` |
 | Gas concentration (trace) | ppb | `_ppb` | `tvoc_ppb` |
+| Mass concentration | µg/m³ | `_ugm3` | `pm25_ugm3` |
 | Illuminance | lux | `_lux` | `illuminance_lux` |
 | Voltage | V | `_v` | `supply_v` |
 | Current | A | `_a` | `load_a` |

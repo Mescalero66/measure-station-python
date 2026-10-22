@@ -15,6 +15,7 @@ from measure_station.sensors.bmp280_i2c import Bmp280Sensor
 from measure_station.sensors.cpu_temperature import CpuTemperatureSensor
 from measure_station.sensors.ens160_aht21_i2c import Ens160Aht21Sensor
 from measure_station.sensors.scd41_i2c import Scd41Sensor
+from measure_station.sensors.sen62_i2c import Sen62Sensor
 from measure_station.sensors.simulated import SimulatedSensor
 
 SENSOR_TYPES: dict[str, type[Sensor]] = {
@@ -23,6 +24,7 @@ SENSOR_TYPES: dict[str, type[Sensor]] = {
     "cpu_temperature": CpuTemperatureSensor,
     "ens160_aht21": Ens160Aht21Sensor,
     "scd41": Scd41Sensor,
+    "sen62": Sen62Sensor,
     "simulated": SimulatedSensor,
 }
 

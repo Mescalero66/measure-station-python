@@ -1,9 +1,10 @@
 import asyncio
+import time
 
 import pytest
 
 from measure_station.models import Reading
-from measure_station.sensors import LatestValues, create_sensor
+from measure_station.sensors import LatestValues, Sample, create_sensor
 from measure_station.sensors.base import Sensor, poll_sensor
 from measure_station.supervisor import Heartbeat
 
@@ -76,6 +77,46 @@ def test_polling_records_latest_values_for_other_sensors() -> None:
     assert sensor.latest_values.get("bench", "pressure_hpa") == reading.values["pressure_hpa"]
     assert sensor.latest_values.get("bench", "no_such_key") is None
     assert sensor.latest_values.get("other", "pressure_hpa") is None
+
+
+class SlowRead(Sensor):
+    """A 0.2 s read, with ``extra_time_s`` added to the read timeout."""
+
+    sensor_type = "slow"
+
+    def __init__(self, extra_time_s: float) -> None:
+        super().__init__("x", 60)
+        self.extra_time_s = extra_time_s
+
+    def read_timeout_s(self, default_s: float) -> float:
+        return default_s + self.extra_time_s
+
+    def read(self) -> Sample:
+        time.sleep(0.2)
+        return Sample({"v": 1})
+
+
+def test_a_slow_read_times_out() -> None:
+    async def scenario() -> None:
+        await poll_sensor(
+            SlowRead(0), asyncio.Queue(), read_timeout_s=0.1, heartbeat=Heartbeat("x", None)
+        )
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(scenario())
+
+
+def test_a_sensor_can_extend_its_read_timeout() -> None:
+    async def scenario() -> Reading:
+        queue: asyncio.Queue[Reading] = asyncio.Queue()
+        task = asyncio.create_task(
+            poll_sensor(SlowRead(1), queue, read_timeout_s=0.1, heartbeat=Heartbeat("x", None))
+        )
+        reading = await asyncio.wait_for(queue.get(), 2)
+        task.cancel()
+        return reading
+
+    assert asyncio.run(scenario()).values == {"v": 1}
 
 
 def test_latest_values_expire() -> None:

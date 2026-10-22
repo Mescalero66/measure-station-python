@@ -78,6 +78,11 @@ class Sensor(ABC):
         """Other sensors whose values this one reads, checked at startup."""
         return []
 
+    def read_timeout_s(self, default_s: float) -> float:
+        """The longest the next ``read()`` may take: ``default_s``
+        (``SENSOR_READ_TIMEOUT_S``), unless that read does slow maintenance."""
+        return default_s
+
     def open(self) -> None:  # noqa: B027 - optional hook
         """Acquire hardware resources."""
 
@@ -115,7 +120,7 @@ async def poll_sensor(
         next_due = loop.time()
         while True:
             heartbeat.beat()
-            async with asyncio.timeout(read_timeout_s):
+            async with asyncio.timeout(sensor.read_timeout_s(read_timeout_s)):
                 sample = await asyncio.to_thread(sensor.read)
             await queue.put(
                 Reading(
