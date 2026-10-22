@@ -138,9 +138,12 @@ TIME_SYNC_MAX_HOLD_S: float = 24 * 3600
 # --------------------------------------------------------------------------- #
 # Concurrency and self-recovery
 # --------------------------------------------------------------------------- #
-# Worker threads for blocking I/O (sensor reads, serial reads, SQLite). The MQ board
-# reader permanently occupies one worker, so keep this >= 5.
-THREAD_POOL_WORKERS: int = 8
+# Worker threads for blocking I/O (sensor reads, serial reads, SQLite). Size it at the
+# number of enabled sensors + 4: one for the MQ board reader, which holds one
+# permanently, and three for the recorder, publisher and health tasks. Then every sensor
+# can be mid-read (e.g. the ~42 s daily maintenance reads) without delaying the rest.
+# Below 5 (4 without the MQ board) the station refuses to start.
+THREAD_POOL_WORKERS: int = 12
 
 # A crashed task (sensor, MQ board reader, publisher...) is restarted with exponential backoff.
 TASK_RESTART_MIN_S: float = 1.0
