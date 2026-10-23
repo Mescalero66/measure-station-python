@@ -1,8 +1,9 @@
 # Raspberry Pi Setup (Fresh Install)
 
 1. **Flash the OS.** In Raspberry Pi Imager, choose **Raspberry Pi OS Lite (32-bit)**,
-   which the Pi 2B needs. In the advanced options, set the hostname (this becomes the
-   default `STATION_ID`), enable SSH and create your user.
+   which the Pi 2B needs. In the advanced options, set the hostname, enable SSH and
+   create your user. (The station's `STATION_ID` is set in `sysconfig.py`, not taken
+   from the hostname.)
 
 2. **Clone and install.** Over SSH:
 

@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -104,3 +105,32 @@ def test_clean_shutdown_flushes_pending_and_queued(outbox: CountingOutbox) -> No
 
     asyncio.run(scenario())
     assert outbox.count() == 2
+
+
+class FailingOnceOutbox(CountingOutbox):
+    """The first write fails, as when the outbox is found corrupt: Outbox quarantines it,
+    opens a fresh one and re-raises, so the caller can retry."""
+
+    def add_many(self, messages):  # type: ignore[no-untyped-def]
+        if self.writes == 0:
+            self.writes += 1
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        return super().add_many(messages)
+
+
+def test_failed_write_is_retried_not_lost(tmp_path: Path, synced_clock: ClockState) -> None:
+    outbox = FailingOnceOutbox(tmp_path / "outbox.sqlite3", synced_clock)
+    outbox.open()
+
+    async def scenario() -> None:
+        queue: asyncio.Queue[Reading] = asyncio.Queue()
+        task = _start(outbox, queue, flush_interval_s=0)
+        await queue.put(Reading(source="s", sensor_type="simulated", values={"i": 0}))
+        # The task still crashes (the supervisor restarts it), but only after retrying.
+        with pytest.raises(sqlite3.DatabaseError):
+            await task
+
+    asyncio.run(scenario())
+    assert outbox.count() == 1
+    assert outbox.writes == 2
+    outbox.close()

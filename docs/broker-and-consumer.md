@@ -25,7 +25,8 @@ a message and still lose it if:
   messages beyond that are dropped.
 - **Grant each station publish rights** (including retained messages) on
   `<base>/<station>/#`.
-- **Consider serving NTP from the broker host** if stations have no internet access. See
+- **Give the broker host the same NTP source as the stations**, so its clock agrees with
+  their `ts` (e.g. for "no health message for N minutes" checks). See
   [Using a Local NTP Server](timekeeping.md#using-a-local-ntp-server).
 
 Example Mosquitto settings:

@@ -27,8 +27,9 @@ The fewer readings that need correcting, the better. Two ways to get there:
 ## Using a Local NTP Server
 
 NTP needs a *reachable* NTP server, not internet access. By default the Pi uses Debian's
-public pool, so a station without internet never syncs. To use a server on the local
-network instead (typically the broker host), list it in `sysconfig.py`, in order of
+public pool, so a station without internet never syncs. Instead, point the station at a
+time source on the local network, such as the router, and give the server Pi (broker and
+database) the same one, so every clock agrees. List it in `sysconfig.py`, in order of
 preference:
 
 ```python
@@ -56,20 +57,28 @@ How it works:
 
 To check it's working, run `timedatectl timesync-status`. The `Server:` line should show
 your local server. The health topic's `clock_synced` should become `true` shortly after
-boot.
+boot. Allow UDP port 123 through any firewall between the stations and the source.
 
-**Setting up the server** (on the broker host or any always-on machine on the LAN), with
-chrony as an example:
+### Choosing the Time Source
 
-```bash
-sudo apt-get install -y chrony
-echo "allow 192.168.1.0/24" | sudo tee /etc/chrony/conf.d/stations.conf   # your station subnet
-# Only if this host itself has no internet/upstream NTP: serve its own clock anyway,
-# so stations at least agree with the server (and with each other).
-echo "local stratum 10" | sudo tee -a /etc/chrony/conf.d/stations.conf
-sudo systemctl restart chrony
-```
+The station trusts the first time it's given. Once synced, it labels new readings `ntp`
+and back-dates the held ones from that time, and it has no way to tell if that time was
+wrong. So **the source must stay silent until it has real time itself**:
 
-Allow UDP port 123 through any firewall between the stations and the server. If the server
-has no upstream time source, all timestamps are only as accurate as its clock. That's
-still consistent across stations, and still far better than a Pi that never syncs.
+- **Safe:** a source that gets its time from upstream (the internet, or a GPS receiver),
+  or keeps it in a battery-backed RTC.
+- **Not safe:** a machine without an RTC that serves its own clock when it has no
+  upstream, such as a Pi running chrony with `local stratum 10`. After a power cut it
+  boots with the time it last saved, up to an hour old, and would hand that out as
+  correct.
+
+When no source answers, the station doesn't sync: its readings wait in the outbox as
+`pending` and are back-dated once real time arrives. That's the safe outcome.
+
+To test a source, start it with the internet unplugged, after a power cut if you can.
+`timedatectl timesync-status` on the station should show it still unsynchronised until
+the internet is back.
+
+If the source is a Linux machine running chrony, `allow 192.168.1.0/24` (your subnet) in
+a file in `/etc/chrony/conf.d/` lets the stations use it. Add `local stratum 10` only if
+that machine has an RTC.

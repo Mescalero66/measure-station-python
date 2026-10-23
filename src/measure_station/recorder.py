@@ -62,7 +62,13 @@ async def record_readings(
                 # still commits these, so the shutdown flush must not write them again.
                 pending.clear()
                 flush_due = None
-                await asyncio.to_thread(outbox.add_many, group)
+                try:
+                    await asyncio.to_thread(outbox.add_many, group)
+                except Exception:
+                    # Not written: keep them for the flush below, which tries once more
+                    # (e.g. into the fresh outbox that replaced a corrupt one).
+                    pending.extend(group)
+                    raise
                 new_data.set()
 
             if loop.time() >= next_prune:
@@ -79,7 +85,7 @@ def _flush_on_exit(
     queue: asyncio.Queue[Reading],
     outbox: Outbox,
 ) -> None:
-    """On shutdown, persist the unflushed group and anything still queued."""
+    """On shutdown or a failed write, persist the unflushed group and anything queued."""
     while True:
         try:
             pending.append(queue.get_nowait())

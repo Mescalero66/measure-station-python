@@ -18,7 +18,6 @@ library's ``sysconfig`` module.
 from __future__ import annotations
 
 import os
-import socket
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +36,7 @@ def _env_list(name: str) -> list[str]:
 # Station identity
 # --------------------------------------------------------------------------- #
 # Used in MQTT topics and payloads. Must not contain '/', '+' or '#'.
-STATION_ID: str = _env("STATION_ID") or socket.gethostname()
+STATION_ID: str = _env("STATION_ID") or "ms-2b"
 
 # --------------------------------------------------------------------------- #
 # Logging
@@ -116,8 +115,9 @@ RECORDER_BATCH_SIZE: int = 200
 # --------------------------------------------------------------------------- #
 # NTP servers for the Pi's clock (systemd-timesyncd), as hostnames or IP addresses, in
 # order of preference. NTP needs a reachable server, not internet access: point this
-# at a server on the local network (e.g. the broker host) so the clock syncs even when
-# the internet is unreachable. Add a public server after it as a backup, e.g.
+# at a time source on the local network (e.g. the router) so the clock syncs even when
+# the internet is unreachable; it must not serve time before it has real time itself
+# (see docs/timekeeping.md). Add a public server after it as a backup, e.g.
 #     NTP_SERVERS = ["192.168.1.10", "pool.ntp.org"]
 # Empty = the OS defaults (Debian's public pool, which needs internet access).
 # Applied as root each time the service starts (see measure_station/ntp_setup.py).
