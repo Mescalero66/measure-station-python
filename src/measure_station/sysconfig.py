@@ -36,7 +36,7 @@ def _env_list(name: str) -> list[str]:
 # Station identity
 # --------------------------------------------------------------------------- #
 # Used in MQTT topics and payloads. Must not contain '/', '+' or '#'.
-STATION_ID: str = _env("STATION_ID") or "ms-2b"
+STATION_ID: str = _env("STATION_ID") or "mstn-2b"
 
 # --------------------------------------------------------------------------- #
 # Logging

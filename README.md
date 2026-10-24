@@ -73,8 +73,8 @@ stalls the rest of the station.
 
 **Setting Up and Running a Station**
 
-- [Raspberry Pi Setup](docs/raspberry-pi-setup.md): from a fresh Raspberry Pi OS install
-  to a running service.
+- [Deploying the Station](docs/deploying-the-station.md): step by step from an empty SD
+  card to a checked, running station, for readers new to Linux.
 - [Operating](docs/operating.md): status, logs, applying configuration changes, updating.
 - [SD Card Wear](docs/sd-card-wear.md): what the station writes, and how to make the card
   last.
@@ -86,6 +86,9 @@ stalls the rest of the station.
   times before NTP sync, and using a local NTP server.
 - [Broker and Consumer Requirements](docs/broker-and-consumer.md): what the MQTT broker and
   the storage/processing system must do so no data is lost.
+- [Server Pi Interface](docs/server-pi-interface.md): everything the server Pi's developer
+  needs: topics, payload fields and types per source, the best source for each quantity,
+  delivery rules and a suggested database design.
 
 **Hardware**
 
