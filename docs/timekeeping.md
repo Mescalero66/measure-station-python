@@ -13,10 +13,15 @@ accurate anyway:
    boot, and those readings are released as `corrected`.
 4. **Some readings can't be corrected.** If the Pi rebooted before ever syncing, that
    boot's offset is unknowable. Those readings are released immediately as `estimated`.
-   So are readings held longer than `TIME_SYNC_MAX_HOLD_S` (24 h by default).
+   So are readings held longer than `TIME_SYNC_MAX_HOLD_S` (7 days by default).
 
 Settings: `TIME_SYNC_POLL_S` and `TIME_SYNC_MAX_HOLD_S` in `sysconfig.py`. While held,
 readings show up in the health topic as `awaiting_time_sync`.
+
+**Health readings are never held**, so a clock problem is visible while it lasts. Before
+sync they are published as `estimated`, with `clock_synced: false` and a rising
+`awaiting_time_sync`; their `boot_ts` is how long the Pi has run without a sync. Health
+readings still waiting for the broker when NTP syncs are corrected like the rest.
 
 The fewer readings that need correcting, the better. Two ways to get there:
 

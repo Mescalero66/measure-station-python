@@ -87,8 +87,9 @@ DATA_DIR: Path = Path(os.environ.get("STATE_DIRECTORY") or Path.cwd() / "data")
 OUTBOX_FILENAME: str = "outbox.sqlite3"
 
 # Upper bound on buffered messages during a long outage. When exceeded, the OLDEST
-# messages are discarded. ~300 bytes/row => 500k rows is roughly 150 MB on disk.
-OUTBOX_MAX_ROWS: int = 500_000
+# messages are discarded. ~16,400 readings/day => 1.5M rows is about 3 months;
+# ~300 bytes/row => roughly 450 MB on disk.
+OUTBOX_MAX_ROWS: int = 1_500_000
 OUTBOX_PRUNE_INTERVAL_S: float = 300.0
 
 # "NORMAL" (with WAL) never corrupts the database but may lose the last few seconds
@@ -133,7 +134,7 @@ TIME_SYNC_POLL_S: float = 10.0
 # anyway, with its unsynchronised timestamp ("ts_src": "estimated"). This bounds
 # the delivery delay at sites where NTP is unreachable even though the broker isn't.
 # 0 = never hold (publish immediately; pre-sync readings are always "estimated").
-TIME_SYNC_MAX_HOLD_S: float = 24 * 3600
+TIME_SYNC_MAX_HOLD_S: float = 7 * 24 * 3600
 
 # --------------------------------------------------------------------------- #
 # Concurrency and self-recovery

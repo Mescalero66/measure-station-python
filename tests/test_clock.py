@@ -117,6 +117,23 @@ class TestOutboxCorrection:
         assert len(box.fetch_batch(10)) == 1
         box.close()
 
+    def test_health_never_held(self, tmp_path: Path, fake_time: FakeTime) -> None:
+        clock = fake_time.clock_state()
+        box = make_outbox(tmp_path / "o.sqlite3", clock, health_source="health")
+        box.add_many([fake_time.reading("co2"), fake_time.reading("health")])
+
+        (row,) = box.fetch_batch(10)  # the sensor reading is held, health isn't
+        assert (row.source, row.ts_quality) == ("health", TimeQuality.PENDING)
+        assert box.count_awaiting_time() == 1  # counts only the held sensor reading
+
+        # Not yet sent (e.g. broker down) when NTP syncs: health is corrected too.
+        fake_time.advance(60)
+        fake_time.ntp_synced = True
+        clock.poll()
+        assert box.apply_time_correction() == 2
+        assert {r.ts_quality for r in box.fetch_batch(10)} == {TimeQuality.CORRECTED}
+        box.close()
+
 
 def test_boot_clock_is_monotonic() -> None:
     assert boot_clock() <= boot_clock()

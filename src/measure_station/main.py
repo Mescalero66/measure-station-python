@@ -88,6 +88,7 @@ async def run(cfg: ModuleType) -> None:
         clock=clock,
         max_rows=cfg.OUTBOX_MAX_ROWS,
         max_time_hold_s=cfg.TIME_SYNC_MAX_HOLD_S,
+        health_source=cfg.HEALTH_SOURCE_NAME,
         synchronous=cfg.OUTBOX_SQLITE_SYNCHRONOUS,
     )
     await asyncio.to_thread(outbox.open)

@@ -7,7 +7,8 @@ process crashes and reboots.
 Readings captured before the system clock was NTP-synchronised are stored with
 ``ts_quality='pending'`` and held back from publishing until
 :meth:`Outbox.apply_time_correction` back-dates them (see :mod:`measure_station.clock`),
-or until they can no longer be corrected.
+or until they can no longer be corrected. The station's health readings are never held,
+so a clock problem is visible while it lasts.
 
 All methods are blocking and thread-safe; call them via ``asyncio.to_thread``.
 """
@@ -79,6 +80,7 @@ class Outbox:
         clock: ClockState,
         max_rows: int,
         max_time_hold_s: float,
+        health_source: str | None = None,
         synchronous: str = "NORMAL",
     ) -> None:
         synchronous = synchronous.upper()
@@ -88,6 +90,7 @@ class Outbox:
         self._clock = clock
         self._max_rows = max_rows
         self._max_time_hold_s = max_time_hold_s
+        self._health_source = health_source
         self._synchronous = synchronous
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
@@ -179,7 +182,8 @@ class Outbox:
 
         Held back: readings from this boot still awaiting a time correction, unless
         they have waited longer than ``max_time_hold_s``. Readings from earlier boots
-        can never be corrected, so they are released immediately.
+        can never be corrected, so they are released immediately. Health readings are
+        never held: they report the clock problem that is holding the rest.
         """
         release_before = self._clock.now_boot_s() - self._max_time_hold_s
         with self._lock:
@@ -189,8 +193,9 @@ class Outbox:
                     "ts, ts_quality, boot_id, boot_ts "
                     "FROM outbox "
                     "WHERE ts_quality != 'pending' OR boot_id != ? OR boot_ts <= ? "
+                    "OR source = ? "
                     "ORDER BY id LIMIT ?",
-                    (self._clock.boot_id, release_before, limit),
+                    (self._clock.boot_id, release_before, self._health_source, limit),
                 )
             )
             return [StoredReading(*row) for row in cursor.fetchall()]
@@ -224,8 +229,11 @@ class Outbox:
         return self._scalar("SELECT COUNT(*) FROM outbox")
 
     def count_awaiting_time(self) -> int:
-        """Readings still held for a time correction (any boot)."""
-        return self._scalar("SELECT COUNT(*) FROM outbox WHERE ts_quality = 'pending'")
+        """Readings still awaiting a time correction (any boot), excluding health."""
+        return self._scalar(
+            "SELECT COUNT(*) FROM outbox WHERE ts_quality = 'pending' AND source IS NOT ?",
+            (self._health_source,),
+        )
 
     def prune(self) -> int:
         """Discard the oldest readings beyond ``max_rows``. Returns the number removed."""
@@ -244,9 +252,9 @@ class Outbox:
 
     # ------------------------------------------------------------------ internals
 
-    def _scalar(self, sql: str) -> int:
+    def _scalar(self, sql: str, params: tuple = ()) -> int:
         with self._lock:
-            return int(self._guarded(lambda conn: conn.execute(sql)).fetchone()[0])
+            return int(self._guarded(lambda conn: conn.execute(sql, params)).fetchone()[0])
 
     def _execute_many(self, sql: str, rows: list[tuple]) -> None:
         """Run one statement for many rows in a single transaction. Caller holds the lock."""

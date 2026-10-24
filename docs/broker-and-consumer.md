@@ -71,7 +71,9 @@ especially on managed cloud brokers.
 - `<base>/<station>/status` is retained. It changes to `offline` on a clean stop, or via
   the last-will when the connection drops.
 - On `<base>/<station>/health`, a rising `outbox_backlog` means data is waiting to be sent.
-  If no health message arrives for several `HEALTH_INTERVAL_S` periods, the station is
+  `clock_synced: false` with a rising `awaiting_time_sync` means sensor data is held
+  because the station's clock hasn't synced (NTP unreachable); health keeps arriving,
+  marked `estimated`. See [Timekeeping](timekeeping.md). If no health message arrives for several `HEALTH_INTERVAL_S` periods, the station is
   unreachable or stalled.
 
 ## End-to-End Acknowledgement (Not Implemented)
