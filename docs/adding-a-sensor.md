@@ -30,7 +30,7 @@ src/measure_station/sensors/
 ├── ens160_aht21_i2c.py  # ENS160 + AHT21 air quality board (adapter, see below)
 ├── mcp9808_i2c.py       # MCP9808 temperature sensor (adapter for an asyncio driver)
 ├── scd41_i2c.py         # SCD41 CO2 sensor (adapter for an asyncio driver)
-├── sen62_i2c.py         # SEN62 particulate matter sensor (adapter for an asyncio driver)
+├── sen6x_i2c.py         # SEN62 or SEN65 particulate matter sensor (adapter for an asyncio driver)
 ├── simulated.py         # fake data for development
 └── sht31_i2c.py         # <- your new driver
 ```
@@ -103,7 +103,7 @@ keyword arguments. Give each one a sensible default, e.g. `i2c_bus=1, address=0x
 - **Stay within `SENSOR_READ_TIMEOUT_S`** (10 s). `open()` and each `read()` are
   abandoned and treated as failures if they take longer. A sensor whose next `read()`
   does slow maintenance can allow itself more time for that read by overriding
-  `read_timeout_s()` (the SEN62's daily fan cleaning, in `sen62_i2c.py`).
+  `read_timeout_s()` (the SEN6x's daily fan cleaning, in `sen6x_i2c.py`).
 - **Import hardware libraries inside `open()`**, not at the top of the module, so the
   station (and its tests) still run on machines without them.
 

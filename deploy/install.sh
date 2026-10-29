@@ -14,7 +14,7 @@ APP_USER=measure-station
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$APP_DIR/.venv"
 ETC_DIR="/etc/$APP_NAME"
-EXTRAS="${EXTRAS-ens160_aht21,bmp280,scd41,bh1750,sen62,mcp9808,cht8305}"
+EXTRAS="${EXTRAS-ens160_aht21,bmp280,scd41,bh1750,sen6x,mcp9808,cht8305}"
 
 log() { printf '\n==> %s\n' "$*"; }
 

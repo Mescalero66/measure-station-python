@@ -30,7 +30,7 @@ RestartPreventExitStatus=78
 # The app pings every WatchdogSec/2 while all tasks are healthy.
 WatchdogSec=120
 TimeoutStartSec=120
-# A clean stop waits for any sensor read in progress; the longest are the SEN62's
+# A clean stop waits for any sensor read in progress; the longest are the SEN6x's
 # daily fan cleaning and the CHT8305's daily heater cool-down (about 42 s each).
 TimeoutStopSec=60
 

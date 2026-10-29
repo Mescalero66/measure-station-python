@@ -234,10 +234,11 @@ SENSORS: list[dict[str, Any]] = [
         "enabled": True,
     },
     {
-        # SEN62 particulate matter sensor (docs/sensors/particulate-sensor.md). Fixed I2C
-        # address 0x6B. It measures continuously (fan and laser always on); each reading
-        # is its latest 1-second result.
-        "type": "sen62",
+        # SEN62 or SEN65 particulate matter sensor (docs/sensors/particulate-sensor.md),
+        # detected at start-up; a SEN65 adds the VOC and NOx indices. Fixed I2C address
+        # 0x6B. It measures continuously (fan and laser always on); each reading is its
+        # latest 1-second result.
+        "type": "sen6x",
         "name": "particulates",
         "interval_s": 60,
         "i2c_bus": 1,

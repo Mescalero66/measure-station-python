@@ -21,7 +21,7 @@ cht8305 = ["smbus2>=0.4"]
 ens160_aht21 = ["smbus2>=0.4"]
 mcp9808 = ["smbus2>=0.4"]
 scd41 = ["smbus2>=0.4"]
-sen62 = ["smbus2>=0.4"]
+sen6x = ["smbus2>=0.4"]
 dev = [
     "pytest>=8",
     "ruff>=0.6",

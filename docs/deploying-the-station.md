@@ -210,7 +210,7 @@ signal, and run four wires from the rails to the Pi.
 | Air quality | ENS160 + AHT21 | `38` and `53` | Leave ADD, CS and INT unconnected. [Wiring](sensors/air-quality-board.md) |
 | Humidity | CHT8305 probe (DFRobot SEN0546) | `40` | Red 3.3 V, black GND, white SCL, yellow SDA. **The SCL wire must be white**: a green one means a different chip that the station can't read. [Wiring](sensors/humidity-sensor.md) |
 | CO2 | SCD41 | `62` | [Wiring](sensors/co2-sensor.md) |
-| Particulates | SEN62 | `6b` | Keep its cable under 10 cm if you can (50 cm at most). [Wiring](sensors/particulate-sensor.md) |
+| Particulates | SEN62 or SEN65 | `6b` | Either model works; the station detects which. Keep its cable under 10 cm if you can (50 cm at most). [Wiring](sensors/particulate-sensor.md) |
 | Pressure | BMP280 | `76` | Leave CSB and SDO unconnected. [Wiring](sensors/pressure-sensor.md) |
 
 **The MQ gas board** connects with two wires, not to the four shared rails:

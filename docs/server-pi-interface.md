@@ -45,13 +45,14 @@ Each entry is `source` · `section.key` (part, typical accuracy).
 
 | Quantity | Primary | Secondary | Meta |
 |---|---|---|---|
-| Air temperature | `temperature` · `values.temperature_c` (MCP9808, ±0.25 °C, steps of 0.0625 °C) | `humidity` · `values.temperature_c` (CHT8305, ±0.3 °C, ±0.5 °C below 0 °C); `particulates` · `values.temperature_c` (SEN62, ±0.45 °C); `co2` · `values.temperature_c` (SCD41, after a hand-set offset for its self-heating) | `barometer` · `meta.temperature_c` (BMP280 chip); `air-quality` · `meta.temperature_c` (AHT21, beside the ENS160's heater); `mqboard-*` · `meta.temperature_c` (the MQ board's compensation input); `cpu` · `values.temperature_c` (the Pi's processor) |
-| Relative humidity | `humidity` · `values.humidity_pct` (CHT8305, ±2 %RH) | `particulates` · `values.humidity_pct` (SEN62, ±4.5 %RH); `co2` · `values.humidity_pct` (SCD41) | `air-quality` · `meta.humidity_pct` (AHT21, beside the heater, so it reads dry) |
+| Air temperature | `temperature` · `values.temperature_c` (MCP9808, ±0.25 °C, steps of 0.0625 °C) | `humidity` · `values.temperature_c` (CHT8305, ±0.3 °C, ±0.5 °C below 0 °C); `particulates` · `values.temperature_c` (SEN62 or SEN65, ±0.45 °C); `co2` · `values.temperature_c` (SCD41, after a hand-set offset for its self-heating) | `barometer` · `meta.temperature_c` (BMP280 chip); `air-quality` · `meta.temperature_c` (AHT21, beside the ENS160's heater); `mqboard-*` · `meta.temperature_c` (the MQ board's compensation input); `cpu` · `values.temperature_c` (the Pi's processor) |
+| Relative humidity | `humidity` · `values.humidity_pct` (CHT8305, ±2 %RH) | `particulates` · `values.humidity_pct` (SEN62 or SEN65, ±4.5 %RH); `co2` · `values.humidity_pct` (SCD41) | `air-quality` · `meta.humidity_pct` (AHT21, beside the heater, so it reads dry) |
 | Pressure | `barometer` · `values.pressure_hpa` (BMP280, ±1 hPa absolute, ±0.12 hPa relative) | | `co2` · `meta.pressure_hpa` (the pressure the SCD41 was compensated with) |
 | CO2 | `co2` · `values.co2_ppm` (SCD41, ±(50 ppm + 2.5 %) up to 1000 ppm) | | |
-| Particulates | `particulates` · `values.pm25_ugm3` (SEN62, ±(5 µg/m³ + 5 %) up to 100 µg/m³), and `pm1_ugm3`, `pm4_ugm3`, `pm10_ugm3` (PM4 and PM10: ±25 µg/m³) | | |
+| Particulates | `particulates` · `values.pm25_ugm3` (SEN62 or SEN65, ±(5 µg/m³ + 5 %) up to 100 µg/m³), and `pm1_ugm3`, `pm4_ugm3`, `pm10_ugm3` (PM4 and PM10: ±25 µg/m³) | | |
 | Illuminance | `light` · `values.illuminance_lux` (BH1750, ±20 %; the cover's transmittance is estimated) | | |
 | VOCs, air quality index | `air-quality` · `values.tvoc_ppb`, `values.aqi` (ENS160, indicative; only while `meta.validity` is `"normal"`) | | |
+| VOC and NOx indices | `particulates` · `values.voc_index`, `values.nox_index` (SEN65 only: relative to the air it has learned as normal, not concentrations; in specification only while `meta.voc` / `meta.nox` are absent) | | |
 | Methane, CO, H2, LPG, NH3, smoke | `mqboard-mq4`, `-mq7`, `-mq8`, `-mq5`, `-mq135`, `-mq2` · `values.concentration_ppm` (indicative, as MQ sensors are cross-sensitive; absolute only while `meta.baseline_tracking` is `true`) | | |
 
 - **`air-quality` · `values.eco2_ppm` isn't CO2.** The ENS160 estimates it from VOCs. Use
@@ -135,7 +136,7 @@ max_queued_bytes 0
 | `barometer` | `bmp280` | Air pressure | 1/min |
 | `co2` | `scd41` | CO2, temperature, humidity | 1/min |
 | `light` | `bh1750` | Illuminance | 1/min |
-| `particulates` | `sen62` | Particulate matter, temperature, humidity | 1/min |
+| `particulates` | `sen62` or `sen65` | Particulate matter, temperature, humidity; a SEN65 adds VOC and NOx indices | 1/min |
 | `temperature` | `mcp9808` | Air temperature | 1/min |
 | `humidity` | `cht8305` | Humidity and temperature | 1/min |
 | `mqboard-mq2`, `-mq4`, `-mq5`, `-mq7`, `-mq8`, `-mq135` | `mq_board` | One gas each (MQ gas board) | 1 per 150 s each |
@@ -186,10 +187,10 @@ reading:
   `mqboard_stale_sensors`. `null` means "unknown" (never 0); NaN and infinity are sent as
   `null`.
 - **Store every number as a double.** A few keys are sent as JSON integers
-  (`co2_ppm`, `aqi`, the counts in `health`); the rest have a decimal point (`25.0`).
+  (`co2_ppm`, `aqi`, `voc_index`, `nox_index`, the counts in `health`); the rest have a decimal point (`25.0`).
 - **Key names are `<quantity>_<unit>`**: `_c` °C, `_pct` % relative humidity, `_hpa` hPa,
   `_ppm`, `_ppb`, `_ugm3` µg/m³, `_lux`, `_kohm` kΩ, `_s` seconds, `_mb` megabytes. Keys
-  with no unit suffix are text codes, booleans or counts.
+  with no unit suffix are text codes, booleans, indexes or counts.
 - **The same key can appear in both sections with different meanings.** `pressure_hpa` in
   `barometer`'s `values` is a measurement; in `co2`'s `meta` it's the pressure its reading
   was compensated with. **Key series by `(station, source, section, key)`.**
@@ -280,7 +281,11 @@ About 180 bytes.
 
 About 220 bytes.
 
-### `particulates` (SEN62)
+### `particulates` (SEN62 or SEN65)
+
+The module is a SEN62 or a SEN65; the station detects which, and `sensor_type` says
+(`"sen62"` or `"sen65"`). A SEN65 adds `voc_index`, `nox_index`, and their `meta` flags; a
+SEN62 never sends those keys.
 
 | Section | Key | Type | Unit | Precision | Meaning |
 |---|---|---|---|---|---|
@@ -290,12 +295,21 @@ About 220 bytes.
 | `values` | `pm10_ugm3` | number or null | µg/m³ | 1 | PM10 (0.3 to 10 µm) |
 | `values` | `temperature_c` | number or null | °C | 2 | Air temperature, compensated for the module's heat |
 | `values` | `humidity_pct` | number or null | % | 1 | Relative humidity, compensated likewise |
+| `values` | `voc_index` | integer or null | | | SEN65 only. VOC index, 1 to 500: 100 is the air it has learned as normal over the last 12 hours; above means more VOCs, below fewer |
+| `values` | `nox_index` | integer or null | | | SEN65 only. NOx index, 1 to 500: 1 is normal (none); above means more NOx (oxidising gases such as NO2) |
 | `meta` | `pm` | text | | | Present only when the PM values may be wrong: `"fan_speed"` (the fan is off its target speed) |
+| `meta` | `voc` | text | | | SEN65 only. Present only as `"warmup"`: less than 1 hour since the sensor was reset, so `voc_index` may be out of specification |
+| `meta` | `nox` | text | | | SEN65 only. Present only as `"warmup"`: less than 6 hours since the reset, likewise for `nox_index` |
 
-Normally no `meta`. About 230 bytes, or 260 with `meta`.
+Normally no `meta`. A SEN62's message is about 230 bytes, or 260 with `meta`. A SEN65's
+is about 260 bytes, or up to 320 with `meta` (300 in its first hour, 285 up to 6 hours).
 
 - The classes are cumulative: PM1 ≤ PM2.5 ≤ PM4 ≤ PM10.
 - Above about 80 %RH, PM reads high (water droplets count as particles).
+- The VOC and NOx indices are relative: they show change against what this sensor has
+  learned as normal, so two stations' indices aren't directly comparable, and they
+  aren't concentrations. A station restart starts the learning again (hence the `meta`
+  flags).
 
 ### `light` (BH1750)
 
@@ -422,7 +436,7 @@ About 414 bytes (488 when `estimated`).
 6. **Ignore unknown keys and sources** instead of rejecting the message. Log a
    message that isn't valid JSON, and acknowledge it, so it can't block the queue.
 7. **Check the quality flags** before using values: `ts_src`, `air-quality`'s `validity`,
-   `particulates`' `pm`, the MQ board's `baseline_tracking`.
+   `particulates`' `pm`, `voc` and `nox`, the MQ board's `baseline_tracking`.
 
 ## Suggested Storage Design
 

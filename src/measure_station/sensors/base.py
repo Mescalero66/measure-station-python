@@ -63,7 +63,8 @@ class Sensor(ABC):
     ``open()`` again, so drivers should (re)acquire all hardware handles in ``open()``.
     """
 
-    # The SENSOR_TYPES key, published with every reading. Set by create_sensor().
+    # Published with every reading. create_sensor() sets the SENSOR_TYPES key; an
+    # adapter whose driver detects the model may refine it in open() (sen6x).
     sensor_type: str
 
     def __init__(self, name: str, interval_s: float) -> None:
