@@ -23,6 +23,7 @@ Contents:
 - [Step 4: Install the Station Software](#step-4-install-the-station-software)
 - [Step 5: Enter the Station's Settings](#step-5-enter-the-stations-settings)
 - [Step 6: Check That It Works](#step-6-check-that-it-works)
+- [Step 7: Connect to the Server Pi (Later)](#step-7-connect-to-the-server-pi-later)
 - [Everyday Tasks](#everyday-tasks)
 - [Troubleshooting](#troubleshooting)
 
@@ -45,7 +46,7 @@ Contents:
 |---|---|---|
 | A name for the Pi on the network (its hostname) | `station1` | Step 1 |
 | A username and password for logging in to the Pi | `admin` | Step 1 |
-| The station ID: a short name that labels all its data | `ms-2b` | Step 5 |
+| The station ID: a short name that labels all its data | `mstn-2b` | Step 5 |
 | The IP address of a time server on your network (often the router) | `192.168.1.1` | Step 5 |
 | The MQTT broker's address, port, username and password | `192.168.1.20`, `1883` | Step 5. Leave these out until the server Pi exists. |
 
@@ -286,7 +287,7 @@ sudo nano /etc/measure-station/env
 It contains lines like these, all switched off with `#`:
 
 ```text
-#MEASURE_STATION_STATION_ID=station-01
+#MEASURE_STATION_STATION_ID=mstn-2b
 #MEASURE_STATION_MQTT_HOST=broker.example.com
 #MEASURE_STATION_MQTT_PORT=1883
 #MEASURE_STATION_MQTT_USERNAME=
@@ -299,16 +300,16 @@ spaces around it:
 
 | Setting | What to enter |
 |---|---|
-| `MEASURE_STATION_STATION_ID` | The station ID, e.g. `ms-2b`. If left off, it's `ms-2b` |
+| `MEASURE_STATION_STATION_ID` | The station ID, e.g. `mstn-2b`. If left off, it's `mstn-2b` |
 | `MEASURE_STATION_NTP_SERVERS` | Your local time server first, then a public one, separated by a comma, e.g. `192.168.1.1,pool.ntp.org` |
-| `MEASURE_STATION_MQTT_HOST` | The server Pi's IP address. Leave it off until the server exists |
+| `MEASURE_STATION_MQTT_HOST` | The server Pi's IP address. Leave it off until the server exists ([Step 7](#step-7-connect-to-the-server-pi-later)) |
 | `MEASURE_STATION_MQTT_PORT` | Usually `1883`. Leave it off until the server exists |
 | `MEASURE_STATION_MQTT_USERNAME`, `MEASURE_STATION_MQTT_PASSWORD` | Only if the broker requires a login |
 
 For example, before the server Pi exists:
 
 ```text
-MEASURE_STATION_STATION_ID=ms-2b
+MEASURE_STATION_STATION_ID=mstn-2b
 MEASURE_STATION_NTP_SERVERS=192.168.1.1,pool.ntp.org
 ```
 
@@ -318,7 +319,9 @@ Save with **Ctrl+O** and **Enter**, then exit with **Ctrl+X**.
 its clock from the network each time it starts. Readings taken before that are held back
 and re-timed once it has. Use a time source on your own network so this works even
 without internet. It must be one that keeps real time itself (one that gets its time from
-the internet or GPS, or has a battery-backed clock). See
+the internet or GPS, or has a battery-backed clock). Its address must never change: the
+router's own address doesn't, but any other device needs a fixed one (a "DHCP
+reservation" in the router's settings). See
 [Choosing the Time Source](timekeeping.md#choosing-the-time-source).
 
 ### Sensor Settings
@@ -465,6 +468,71 @@ This prints the number of readings waiting to be sent. Without a broker it rises
 **The station is deployed.** It now runs by itself, and restarts itself after a power cut
 or a fault.
 
+## Step 7: Connect to the Server Pi (Later)
+
+Do this once the server Pi and its MQTT broker are running. Until then, the station keeps
+every reading, and sends them all when it connects.
+
+1. **Get the broker's details** from the server Pi's developer: its IP address, its port
+   (usually `1883`), and a username and password if it requires a login.
+
+   - **The address must never change.** The station finds the broker only by this
+     address. Ask for the server Pi to have a fixed one, usually a "DHCP reservation" in
+     the router's settings, or the router may give it a new address after a restart and
+     the station will stop sending.
+   - **The password should use only letters, digits, `-` and `_`.** The env file treats
+     quote marks, `\` and spaces specially, so a password containing them can reach the
+     broker changed, and be rejected.
+
+2. **Add them to the station's settings.** Connect with `ssh` (as in Step 2), then open
+   the file from Step 5:
+
+   ```bash
+   sudo nano /etc/measure-station/env
+   ```
+
+   Delete the `#` from the start of the `MQTT` lines and put in your values, as in Step 5.
+   The lines without a `#` should then read like this (with your values):
+
+   ```text
+   MEASURE_STATION_STATION_ID=mstn-2b
+   MEASURE_STATION_NTP_SERVERS=192.168.1.1,pool.ntp.org
+   MEASURE_STATION_MQTT_HOST=192.168.1.20
+   MEASURE_STATION_MQTT_PORT=1883
+   MEASURE_STATION_MQTT_USERNAME=mstn-2b
+   MEASURE_STATION_MQTT_PASSWORD=the-password
+   ```
+
+   Leave out the username and password lines if the broker has no login. As before: no
+   `#` at the start, and no spaces around the `=`. Save with **Ctrl+O** and **Enter**,
+   then exit with **Ctrl+X**.
+
+3. **Restart the station** so it reads the new settings:
+
+   ```bash
+   sudo systemctl restart measure-station
+   ```
+
+4. **Check that it connected:**
+
+   ```bash
+   sudo journalctl -u measure-station -n 20
+   ```
+
+   Within a few seconds you should see `Connected to MQTT broker 192.168.1.20:1883`.
+   Repeated `MQTT link down` lines mean it can't reach the broker: see
+   [Troubleshooting](#troubleshooting).
+
+5. **Watch the stored readings go out:**
+
+   ```bash
+   sudo sqlite3 /var/lib/measure-station/outbox.sqlite3 'select count(*) from outbox'
+   ```
+
+   Run it a few times. The number falls as the station sends its backlog, oldest first,
+   and then stays near zero. Each reading keeps the time it was taken, so the server
+   shows the whole period the station ran without it.
+
 ## Everyday Tasks
 
 Connect with `ssh` first, as in Step 2.
@@ -515,5 +583,6 @@ new code so the station starts quickly.
 | A sensor keeps logging `crashed` | Check its wiring. If it isn't fitted, set its `"enabled"` to `False` (Step 5) |
 | The humidity sensor logs a version error | The probe has the newer CHT832X chip (green SCL wire), which needs a different driver. Tell the developer |
 | `sudo git pull` says `Your local changes would be overwritten` | Your edits to `sysconfig.py` clash with the update. Run `sudo git stash`, then `sudo git pull`, then `sudo git stash pop`. If that last command reports a conflict, ask the developer |
-| `System clock synchronized: no` for a long time | Check `MEASURE_STATION_NTP_SERVERS` in the env file, and that the time server is reachable: `timedatectl timesync-status` shows which server it's trying |
+| The log keeps showing `MQTT link down` | Check `MEASURE_STATION_MQTT_HOST` and `MEASURE_STATION_MQTT_PORT` in the env file for typos, and that the server Pi is on: `ping -c 3 192.168.1.20` (its address) should get replies. No replies, but the server Pi is on: its address has probably changed. Find its new one in the router's list of connected devices, give it a fixed address (Step 7), and correct the env file. Replies: the broker may not be running, or may reject the username or password: ask the server Pi's developer. Readings wait on the station meanwhile |
+| `System clock synchronized: no` for a long time | Check `MEASURE_STATION_NTP_SERVERS` in the env file (if the time server isn't the router, its address may have changed), and that the time server is reachable: `timedatectl timesync-status` shows which server it's trying |
 | Random sensor errors or restarts | Often a weak power supply. Try a better one (2.5 A) |

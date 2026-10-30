@@ -22,13 +22,14 @@ it. For the reasons behind each rule, see [MQTT Messages](mqtt-messages.md),
 |---|---|
 | Transport | MQTT 3.1.1 over TCP, over the LAN (Ethernet) |
 | Direction | Station to broker only. The station connects out, publishes, and subscribes to nothing; it accepts no commands |
+| Station ID | `mstn-2b` (the first station; set on each station) |
 | Topics | `measure-station/<station>/<source>`, plus `measure-station/<station>/status` |
 | Payload | Compact UTF-8 JSON, 150 to 490 bytes (the status topic is plain text) |
 | Delivery | QoS 1, at-least-once: expect duplicates |
 | Rate per station | About 16,400 messages a day (about 11 a minute) |
 | Timestamps | UTC capture time in the payload (`ts`), never the arrival time |
 | De-duplication key | `(station, source, ts)` |
-| Backlog | Up to 1,500,000 messages buffered on the station during an outage, sent oldest first when it reconnects |
+| Backlog | Up to 1,500,000 messages (about 3 months) buffered on the station during an outage, sent oldest first when it reconnects |
 
 ## Best Source for Each Quantity
 
@@ -79,7 +80,7 @@ Each entry is `source` · `section.key` (part, typical accuracy).
 | Setting | Value |
 |---|---|
 | Protocol | MQTT 3.1.1 |
-| Client ID | `measure-station-<station>`, e.g. `measure-station-ms-2b` |
+| Client ID | `measure-station-<station>`, e.g. `measure-station-mstn-2b` |
 | Clean session | Yes. The station keeps its own outbox, so it needs no session state on the broker |
 | Keepalive | 30 s |
 | Authentication | Username and password, optional (set on the station) |
@@ -120,10 +121,13 @@ max_queued_bytes 0
 
 - **`measure-station`** is the station's base topic. It's a setting (`MQTT_BASE_TOPIC`),
   but every station uses this default unless told otherwise.
-- **`<station>`** is the station ID (e.g. `ms-2b`) and **`<source>`** names the data
+- **`<station>`** is the station ID (e.g. `mstn-2b`) and **`<source>`** names the data
   series. Both match `^[A-Za-z0-9_.-]+$`, so they contain no `/`, `+` or `#`.
 - **`status` is reserved:** no reading uses it as a source. Parse it separately, since its
-  payload isn't JSON.
+  payload isn't JSON. The station sets it to `online` each time it connects, and to
+  `offline` when it stops cleanly. If the connection just drops, the broker publishes
+  the station's last will (`offline`) once it notices, within about 45 s (1.5 × the
+  keepalive).
 - **Subscribe to `measure-station/+/+`** to receive everything from every station. The
   source in the topic always equals the payload's `source`.
 
@@ -152,10 +156,10 @@ reading:
 
 ```json
 {
-  "station": "ms-2b",
+  "station": "mstn-2b",
   "source": "co2",
   "sensor_type": "scd41",
-  "ts": "2026-10-21T09:40:00.000+00:00",
+  "ts": "2026-10-21T09:40:02.517+00:00",
   "ts_src": "ntp",
   "values": {
     "co2_ppm": 500,
@@ -209,7 +213,7 @@ correct anything. `ts_src` says how a timestamp was obtained:
 |---|---|---|
 | `ntp` | Taken while the clock was synchronised | Accurate |
 | `corrected` | Taken before sync, re-timed by the station once it synced | Accurate (within seconds, even over a day) |
-| `estimated` | Couldn't be corrected; `ts` is the Pi's unsynchronised clock | Approximate: flag it, or exclude it from time-sensitive analysis. `boot_id` and `boot_ts` are included for reference |
+| `estimated` | Couldn't be corrected; `ts` is the Pi's unsynchronised clock | Unreliable: flag it, or exclude it from time-sensitive analysis. After a power cut, the Pi's clock starts from about its last shutdown time, so `ts` can be hours or weeks too early. `boot_id` and `boot_ts` are included for reference |
 
 When to expect `estimated`:
 
@@ -226,11 +230,57 @@ Consequences for the server:
   arrives with its original timestamps. Aggregates, charts and alerts must accept data
   for past time windows.
 - **Order by `ts`, never by arrival.** The station sends in batches of 50 at once, and
-  re-sends after reconnects.
+  re-sends after reconnects. While its clock is unsynchronised, `health` readings are
+  sent at once while the others wait, so they arrive ahead of older readings.
 - **A rare duplicate has a different `ts`.** A `health` reading (or one released after
   the 7-day hold) whose acknowledgement was lost just before the clock synced is re-sent
   as `corrected`, with a new `ts`. The de-duplication key doesn't catch it, so the
   database keeps both: one `estimated`, one `corrected`.
+
+## Timing, Gaps and Data Loss
+
+**When readings are taken**
+
+- **`ts` is when the reading was completed,** not a round minute. Each source is read
+  every 60 s from when it started, so each has its own second within the minute (normally
+  within a few seconds of each other), and that second moves whenever the station or the
+  sensor restarts.
+- **Never join sources on an exact `ts`:** no two sources share one. To put sources side
+  by side (e.g. CO2 against temperature, or one row per minute), group them into
+  time buckets, such as `date_trunc('minute', ts)`, or take the nearest reading within
+  ±30 s.
+- **Slow readings, once a day.** Every 24 h after it starts, `particulates` cleans its
+  fan, and `humidity` runs its heater to dry the probe. That reading arrives up to about
+  40 s later in its minute than usual. It's still a normal, settled reading: nothing
+  flags it. If the humidity probe hasn't cooled after 40 s, that one reading can read
+  slightly warm and dry.
+- **`particulates` starts late.** Its first reading comes about 30 s after the sensor
+  starts (its fan and laser must settle), and the 1-minute rhythm runs from there.
+
+**What a fault looks like**
+
+- **A failed reading isn't sent.** If a sensor stops answering, its source goes quiet
+  until it recovers (the station retries, backing off to once a minute). There's no
+  `null` placeholder. The exceptions: the MQ board's `concentration_ppm` is published as
+  `null` on a failed read, and `particulates`' values can be `null` individually.
+- **So detect gaps yourself.** Expect each source at its rate (see [Topics](#topics)),
+  and treat a missing source as a fault. `health`'s `task_restarts` rising at the same
+  time confirms it's the station retrying.
+- **A source that has never sent anything** is a sensor that is disabled or failed at
+  start-up. `cpu` and `health` need no extra hardware, so they come from any working
+  station.
+
+**When data can be lost**
+
+The station is built not to lose readings, but three things can:
+
+| Event | What's lost | Visible as |
+|---|---|---|
+| Power cut, or the station crashes | Up to the last 10 s of readings (held in memory to save SD card wear) | A short gap in every source |
+| An outage longer than about 3 months | The oldest readings, beyond the 1,500,000 held | A gap at the start of the outage |
+| The station's SD card database is corrupted | The readings it held, not yet sent | A gap; the station logs it and starts afresh |
+
+Nothing in the data marks these gaps.
 
 ## Readings by Source
 
@@ -374,10 +424,10 @@ About 414 bytes (488 when `estimated`).
 
 ```json
 {
-  "station": "ms-2b",
+  "station": "mstn-2b",
   "source": "health",
   "sensor_type": "station",
-  "ts": "2026-10-22T08:00:00.000+00:00",
+  "ts": "2026-10-22T08:00:03.164+00:00",
   "ts_src": "ntp",
   "values": {
     "uptime_s": 86400,
@@ -477,13 +527,19 @@ IGNORE`.)
       serve time itself.
 - [ ] The broker listens on the agreed port, with persistence on, `autosave_interval` of
       60 s or less, and a queue limit that holds a full backlog.
+- [ ] The server Pi has a fixed IP address (e.g. a DHCP reservation): the station is
+      configured with the address, not a name.
 - [ ] Each station's login (if any) may publish and retain on
-      `measure-station/<station>/#`.
+      `measure-station/<station>/#`, and its password uses only letters, digits, `-` and
+      `_` (the station's systemd env file mangles quotes, `\` and spaces).
 - [ ] The consumer uses a fixed client ID, a persistent session and QoS 1, and
       acknowledges after committing.
 - [ ] The database rejects duplicates on `(station, source, ts)`.
 - [ ] Charts and aggregates are by `ts`, and accept late data.
 - [ ] Alerts: no `health` for several minutes; `status` = `offline`; `clock_synced` false;
-      a rising `outbox_backlog`.
+      a rising `outbox_backlog`; any source silent for several of its intervals.
+- [ ] Charts that combine sources group them into time buckets, never join on exact
+      `ts`.
 - [ ] Then set `MEASURE_STATION_MQTT_HOST` (and port, username and password) on the
-      station, restart it, and watch its `outbox_backlog` drain to zero.
+      station, restart it, and watch its `outbox_backlog` drain to zero (see
+      [Connect to the Server Pi](deploying-the-station.md#step-7-connect-to-the-server-pi-later)).
