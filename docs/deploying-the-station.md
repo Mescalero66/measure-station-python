@@ -44,8 +44,8 @@ Contents:
 
 | What | Example | Used in |
 |---|---|---|
-| A name for the Pi on the network (its hostname) | `station1` | Step 1 |
-| A username and password for logging in to the Pi | `admin` | Step 1 |
+| A name for the Pi on the network (its hostname) | `mstn-2b` | Step 1 |
+| A username and password for logging in to the Pi | `mstn` | Step 1 |
 | The station ID: a short name that labels all its data | `mstn-2b` | Step 5 |
 | The IP address of a time server on your network (often the router) | `192.168.1.1` | Step 5 |
 | The MQTT broker's address, port, username and password | `192.168.1.20`, `1883` | Step 5. Leave these out until the server Pi exists. |
@@ -110,8 +110,8 @@ called Raspberry Pi Imager.
 
    | Setting | Value |
    |---|---|
-   | Hostname | Your chosen name, e.g. `station1` |
-   | Username and password | Your chosen login. Write the password down |
+   | Hostname | Your chosen name, e.g. `mstn-2b` |
+   | Username and password | Your chosen login, e.g. `mstn` Write the password down |
    | Wireless LAN | Leave off (the Pi 2B has no Wi-Fi) |
    | Locale | Your time zone and keyboard layout |
    | SSH (on the Services or Remote access page) | **Enable**, with password authentication |
