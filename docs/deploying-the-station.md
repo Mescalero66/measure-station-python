@@ -358,11 +358,14 @@ Open the main settings file:
 sudo nano /opt/measure-station/src/measure_station/sysconfig.py
 ```
 
-Change only these, if they apply. Use **Ctrl+W** to find each one.
+Change only these, if they apply. Use **Ctrl+W** to find each one. The first two are in
+the **Fallback values** section near the top of the file: every value the station uses in
+place of a measurement it doesn't have.
 
 | Find | Change it when | How |
 |---|---|---|
-| `"altitude_m": 0,` | Always | Replace `0` with the station's height above sea level, in metres. The CO2 sensor uses it when the pressure sensor is unavailable |
+| `FALLBACK_ALTITUDE_M: float = 75` | Always | Replace `75` with the station's height above sea level, in metres. The CO2 sensor uses it when the pressure sensor is unavailable |
+| `FALLBACK_FAN_DUTY_PCT: float = 50.0` | You want a different fan speed when a fan input is missing | Replace `50.0` with a duty cycle from 0 to 100 |
 | `"enabled": True,` | A sensor isn't fitted | Change `True` to `False` in that sensor's section, or the log shows an error for it every minute |
 | `MQBOARD_ENABLED: bool = True` | The MQ gas board isn't connected | Change `True` to `False` |
 

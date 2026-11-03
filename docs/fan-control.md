@@ -52,10 +52,15 @@ and `FAN_OFF_DUTY_PCT` (0). Duty cycles are whole percentages.
 ## When an Input Is Missing
 
 If an input sensor fails, or misses two readings in a row, the fans run at least at
-`FAN_FAILSAFE_DUTY_PCT` (50 %) until its readings return. If the other control asks for
+`FALLBACK_FAN_DUTY_PCT` (50 %) until its readings return. If the other control asks for
 more, they run at that instead. The log says which source is missing. Right after the
 station starts, the fans run at the failsafe duty cycle for a few seconds, until the
 sensors' first readings arrive.
+
+`FALLBACK_FAN_DUTY_PCT` is in the **Fallback values** section at the top of
+`sysconfig.py`, with the station's other fallbacks. The fan control section's
+`FAN_FAILSAFE_DUTY_PCT` takes its value from it, so change it there, not in the fan
+control section.
 
 When the station stops, it leaves the fans at the failsafe duty cycle. The PWM controller
 keeps running without the station, so the fans keep that speed until it starts again.

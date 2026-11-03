@@ -114,9 +114,13 @@ A sensor can use another sensor's latest readings, e.g. for compensation. The SC
 uses the barometer's pressure this way (`scd41_i2c.py`):
 
 - **Read them** with `self.latest_values.get(source, key)`, for a key in that sensor's
-  `values`. It returns `None` if that sensor hasn't produced the key yet, or has missed two of its own readings. Always
-  have a fallback. `latest_values` is also `None` when the sensor runs on its own (e.g.
-  in `read_sensor`).
+  `values`. It returns `None` if that sensor hasn't produced the key yet, or has missed
+  two of its own readings. Always have a fallback. `latest_values` is also `None` when
+  the sensor runs on its own (e.g. in `read_sensor`).
+- **Put the fallback value in the Fallback values section** at the top of
+  `sysconfig.py`, as a `FALLBACK_*` constant, and pass it to the sensor from its
+  `SENSORS` entry (as the SCD41's `"altitude_m": FALLBACK_ALTITUDE_M` does). Then every
+  value used in place of a missing measurement is in one place.
 - **Declare the source** by overriding `uses_sources()` to return its name. Startup then
   checks that it's another enabled sensor, so a misspelt name is a configuration error.
 - **Publish what you used** in the reading's `meta`, so consumers can tell how each

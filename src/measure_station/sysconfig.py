@@ -39,6 +39,26 @@ def _env_list(name: str) -> list[str]:
 STATION_ID: str = _env("STATION_ID") or "mstn-2b"
 
 # --------------------------------------------------------------------------- #
+# Fallback values
+# --------------------------------------------------------------------------- #
+# Every value the station uses in place of a measurement it doesn't have, all here.
+# A measurement counts as missing when its sensor has failed, or has missed two
+# readings in a row. The settings further down refer to these.
+#
+# The station's height above sea level, in metres (0-3000). The CO2 sensor (SCD41)
+# compensates for air pressure with the barometer's live reading; without one, it uses
+# the standard pressure at this altitude (published as "comp_src": "alt"). Set it for
+# each site: every 100 m of error costs about 1 % of the CO2 reading while it's in use.
+FALLBACK_ALTITUDE_M: float = 75
+# The least the fans run at, 0-100 %, while a fan control input (the DS18B20 probe or
+# the CHT8305) is missing; more if the other control asks for it. Also left set when the
+# station stops (docs/fan-control.md).
+FALLBACK_FAN_DUTY_PCT: float = 50.0
+#
+# Sensors with no fallback: the air quality board (ENS160) always compensates with the
+# AHT21 on the same board, and the MQ gas board compensates on the board itself.
+
+# --------------------------------------------------------------------------- #
 # Logging
 # --------------------------------------------------------------------------- #
 LOG_LEVEL: str = "INFO"
@@ -211,9 +231,9 @@ SENSORS: list[dict[str, Any]] = [
         "i2c_bus": 1,
         # Pressure compensation: the live pressure_hpa of pressure_source (a sensor name,
         # or None), falling back to the standard pressure at altitude_m (0-3000 m above
-        # sea level) when that's missing or out of date.
+        # sea level) when that's missing or out of date. Set FALLBACK_ALTITUDE_M above.
         "pressure_source": "barometer",
-        "altitude_m": 0,
+        "altitude_m": FALLBACK_ALTITUDE_M,
         # Applied at every start, in the sensor's RAM (its EEPROM is never written).
         "temperature_offset_c": 4.0,  # its self-heating; set once mounted in its enclosure
         "asc_enabled": True,  # automatic self-calibration: needs fresh air weekly
@@ -358,10 +378,9 @@ FAN_HUMIDITY_HYSTERESIS_PCT: float = 3.0
 FAN_MIN_DUTY_PCT: float = 30.0
 FAN_MAX_DUTY_PCT: float = 100.0
 FAN_OFF_DUTY_PCT: float = 0.0
-# The least the fans run at while an input is missing or out of date (its sensor has
-# missed two readings), more if the other control asks for it. Left set when the
-# station stops.
-FAN_FAILSAFE_DUTY_PCT: float = 50.0
+# The failsafe duty cycle, for a missing input. Set FALLBACK_FAN_DUTY_PCT under
+# "Fallback values" at the top of this file, not here.
+FAN_FAILSAFE_DUTY_PCT: float = FALLBACK_FAN_DUTY_PCT
 
 # How often the duty cycle is recalculated. The sensors read every 60 s, so this only
 # limits how soon a new reading takes effect. Fan control isn't published on its own:

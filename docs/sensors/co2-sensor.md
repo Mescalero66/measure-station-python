@@ -106,7 +106,7 @@ change them, and a replacement sensor picks them up automatically.
 | `interval_s` | 60 | Seconds between readings |
 | `i2c_bus` | 1 | I2C bus number (1 is GPIO2/GPIO3 on the header) |
 | `pressure_source` | `"barometer"` | The sensor whose `pressure_hpa` compensates CO2 live, or `None` to use only the altitude. Checked at startup: it must be another enabled sensor |
-| `altitude_m` | 0 | The station's altitude above sea level, 0–3000 m: the fallback for pressure compensation |
+| `altitude_m` | `FALLBACK_ALTITUDE_M` (75) | The station's altitude above sea level, 0–3000 m: the fallback for pressure compensation. Set it with `FALLBACK_ALTITUDE_M` in the Fallback values section at the top of `sysconfig.py`, not here |
 | `temperature_offset_c` | 4.0 | Subtracted from the temperature for the sensor's self-heating; affects temperature and humidity, not CO2 |
 | `asc_enabled` | `True` | Automatic self-calibration. Needs fresh air (about 400 ppm) at least weekly |
 
