@@ -227,4 +227,10 @@ data/
 # Claude Code session notes
 CLAUDE.md
 
-gitattributes
+# Local git-based history backup managed by KiCad
+cad/.history/
+cad/*.bak / *-backups/
+cad/_autosave-*
+cad/fp-info-cache
+cad/**/*-backups/*.zip
+cad/**/*-backups
