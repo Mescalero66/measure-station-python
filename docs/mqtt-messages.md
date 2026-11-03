@@ -33,7 +33,7 @@ sensor's page in [`sensors/`](sensors/) lists its keys.
 - **The same key can appear in both**, with different meanings. `pressure_hpa` in the
   barometer's `values` is a measured pressure; in the CO2 sensor's `meta` it's the
   pressure its reading was compensated with. Keep the section as part of the key.
-- **`meta` is left out** when a reading has none (e.g. `cpu`, `health`).
+- **`meta` is left out** when a reading has none (e.g. `temperature`, `health`).
 - **Keys follow the same rules in both:** `<quantity>_<unit>`, or no suffix for text
   codes and flags. Flags are text (e.g. `"normal"`, `"alt"`) or JSON booleans, never
   numeric codes.

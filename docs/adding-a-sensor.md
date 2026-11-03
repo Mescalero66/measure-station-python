@@ -27,6 +27,7 @@ src/measure_station/sensors/
 ├── bmp280_i2c.py        # BMP280 pressure sensor (adapter for an asyncio driver)
 ├── cht8305_i2c.py       # CHT8305 temperature and humidity probe (adapter for an asyncio driver)
 ├── cpu_temperature.py   # Pi SoC temperature (no hardware needed)
+├── ds18b20_1wire.py     # DS18B20 1-wire temperature probe (reads the kernel's sysfs file)
 ├── ens160_aht21_i2c.py  # ENS160 + AHT21 air quality board (adapter, see below)
 ├── mcp9808_i2c.py       # MCP9808 temperature sensor (adapter for an asyncio driver)
 ├── scd41_i2c.py         # SCD41 CO2 sensor (adapter for an asyncio driver)
@@ -228,6 +229,10 @@ SENSORS: list[dict[str, Any]] = [
     },
 ]
 ```
+
+`"publish": False` reads the sensor only for other parts of the station (another
+sensor's `pressure_source`, or [fan control](fan-control.md)) and never sends its
+readings to MQTT. The default is `True`.
 
 Then restart the service: `sudo systemctl restart measure-station`.
 

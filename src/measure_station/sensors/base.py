@@ -74,6 +74,9 @@ class Sensor(ABC):
         self.interval_s = float(interval_s)
         # Shared by every sensor in the station (set by main), None when run alone.
         self.latest_values: LatestValues | None = None
+        # False: read only for other parts of the station (e.g. fan control), never sent
+        # to MQTT. Set by create_sensor() from the entry's "publish" key.
+        self.publish = True
 
     def uses_sources(self) -> list[str]:
         """Other sensors whose values this one reads, checked at startup."""
@@ -123,14 +126,15 @@ async def poll_sensor(
             heartbeat.beat()
             async with asyncio.timeout(sensor.read_timeout_s(read_timeout_s)):
                 sample = await asyncio.to_thread(sensor.read)
-            await queue.put(
-                Reading(
-                    source=sensor.name,
-                    sensor_type=sensor.sensor_type,
-                    values=sample.values,
-                    meta=sample.meta,
+            if sensor.publish:
+                await queue.put(
+                    Reading(
+                        source=sensor.name,
+                        sensor_type=sensor.sensor_type,
+                        values=sample.values,
+                        meta=sample.meta,
+                    )
                 )
-            )
             if sensor.latest_values is not None:
                 # Valid until it has missed two of its own readings.
                 valid_for_s = 2 * sensor.interval_s + read_timeout_s

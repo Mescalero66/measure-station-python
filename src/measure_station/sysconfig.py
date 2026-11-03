@@ -87,7 +87,7 @@ DATA_DIR: Path = Path(os.environ.get("STATE_DIRECTORY") or Path.cwd() / "data")
 OUTBOX_FILENAME: str = "outbox.sqlite3"
 
 # Upper bound on buffered messages during a long outage. When exceeded, the OLDEST
-# messages are discarded. ~16,400 readings/day => 1.5M rows is about 3 months;
+# messages are discarded. ~15,000 readings/day => 1.5M rows is about 3 months;
 # ~300 bytes/row => roughly 450 MB on disk.
 OUTBOX_MAX_ROWS: int = 1_500_000
 OUTBOX_PRUNE_INTERVAL_S: float = 300.0
@@ -140,11 +140,12 @@ TIME_SYNC_MAX_HOLD_S: float = 7 * 24 * 3600
 # Concurrency and self-recovery
 # --------------------------------------------------------------------------- #
 # Worker threads for blocking I/O (sensor reads, serial reads, SQLite). Size it at the
-# number of enabled sensors + 4: one for the MQ board reader, which holds one
-# permanently, and three for the recorder, publisher and health tasks. Then every sensor
-# can be mid-read (e.g. the ~42 s daily maintenance reads) without delaying the rest.
-# Below 5 (4 without the MQ board) the station refuses to start.
-THREAD_POOL_WORKERS: int = 12
+# number of enabled sensors + 5: one for the MQ board reader, which holds one
+# permanently, and four for the recorder, publisher, health and fan control tasks. Then
+# every sensor can be mid-read (e.g. the ~42 s daily maintenance reads) without delaying
+# the rest. Below 4, plus one each for the MQ board and fan control, the station refuses
+# to start.
+THREAD_POOL_WORKERS: int = 13
 
 # A crashed task (sensor, MQ board reader, publisher...) is restarted with exponential backoff.
 TASK_RESTART_MIN_S: float = 1.0
@@ -164,8 +165,8 @@ WATCHDOG_FALLBACK_INTERVAL_S: float = 30.0
 # --------------------------------------------------------------------------- #
 # Station health reporting
 # --------------------------------------------------------------------------- #
-# Periodic self-report (uptime, outbox backlog, load, memory, disk) published as
-# an ordinary reading under this source name.
+# Periodic self-report (uptime, outbox backlog, CPU usage and temperature, memory,
+# disk, fan control) published as an ordinary reading under this source name.
 HEALTH_SOURCE_NAME: str = "health"
 HEALTH_INTERVAL_S: float = 60.0
 
@@ -177,15 +178,13 @@ HEALTH_INTERVAL_S: float = 60.0
 SENSOR_READ_TIMEOUT_S: float = 10.0
 
 # Each entry: "type" selects the driver (see measure_station.sensors.SENSOR_TYPES),
-# "name" is the unique MQTT source name, "interval_s" the polling period. Any other
-# keys are passed to the driver's constructor.
+# "name" is the unique MQTT source name, "interval_s" the polling period. Optional:
+# "enabled" (default True), and "publish" (default True; False reads the sensor only
+# for other parts of the station, such as fan control, and never sends it to MQTT).
+# Any other keys are passed to the driver's constructor.
+# The Pi's CPU temperature is in the health report (cpu_temperature_c), so it needs no
+# entry; the "cpu_temperature" type can still publish it as a source of its own.
 SENSORS: list[dict[str, Any]] = [
-    {
-        "type": "cpu_temperature",
-        "name": "cpu",
-        "interval_s": 60,
-        "enabled": True,
-    },
     {
         # ENS160 + AHT21 air quality board (docs/sensors/air-quality-board.md).
         "type": "ens160_aht21",
@@ -270,6 +269,19 @@ SENSORS: list[dict[str, Any]] = [
         "enabled": True,
     },
     {
+        # DS18B20 1-wire temperature probe (docs/sensors/onewire-temperature-sensor.md),
+        # on GPIO4 (header pin 7) with a 4.7 kΩ pull-up to 3.3 V. Each reading is one
+        # 0.75 s conversion. Read for fan control only: not sent to MQTT ("publish").
+        "type": "ds18b20",
+        "name": "temperature-probe",
+        "interval_s": 60,
+        "publish": False,
+        # Its 1-wire ID (e.g. "28-0000075a1b2c", see /sys/bus/w1/devices/), or None
+        # to use the only DS18B20 on the bus.
+        "device_id": None,
+        "enabled": True,
+    },
+    {
         # Generates fake data. Useful for exercising the pipeline on a dev machine.
         "type": "simulated",
         "name": "simulated",
@@ -304,3 +316,54 @@ MQBOARD_MAX_HOLD_S: float = 300.0
 # Corrupt lines are counted and summarised at most once per interval, so a wiring or
 # baud-rate problem can't flood the journal and wear out the SD card.
 MQBOARD_CORRUPT_LOG_INTERVAL_S: float = 60.0
+
+# --------------------------------------------------------------------------- #
+# Fan control (PWM)
+# --------------------------------------------------------------------------- #
+# 2-wire fans switched by the Pi's hardware PWM (through a MOSFET), their duty cycle
+# set from the sensors' latest values (docs/fan-control.md). The PWM overlay in
+# config.txt chooses the pin: deploy/install.sh adds dtoverlay=pwm,pin=18,func=2
+# (GPIO18, header pin 12), which is pwmchip0 channel 0.
+FAN_ENABLED: bool = True
+FAN_PWM_CHIP: int = 0
+FAN_PWM_CHANNEL: int = 0
+# Switching a 2-wire fan's power: low enough for its motor electronics to keep up.
+# If the fan hums or ticks, try 25-50 Hz.
+FAN_PWM_FREQUENCY_HZ: float = 100
+# True if the driver stage inverts the signal (fan on while the pin is low, e.g. a
+# P-channel MOSFET on the fan's positive supply).
+FAN_PWM_INVERTED: bool = False
+
+# Two controls run together, and the fans run at the higher of their duty cycles:
+#   temperature difference: temperature of FAN_TEMPERATURE_SOURCE minus that of
+#                           FAN_REFERENCE_SOURCE, in °C (their "temperature_c").
+#   humidity:               relative humidity of FAN_HUMIDITY_SOURCE, in % ("humidity_pct").
+FAN_TEMPERATURE_SOURCE: str = "temperature-probe"  # the DS18B20
+FAN_REFERENCE_SOURCE: str = "humidity"  # the CHT8305
+FAN_HUMIDITY_SOURCE: str = "humidity"  # the CHT8305
+
+# The fan curve for each control. The fans turn on at FAN_MIN_DUTY_PCT when the input
+# reaches START, rising in a straight line to FAN_MAX_DUTY_PCT at FULL. They turn off
+# again only once the input is HYSTERESIS back below START. FULL may be below START,
+# for fans that run as the input falls (e.g. START 0, FULL -5: the probe colder).
+FAN_TEMPERATURE_DIFFERENCE_START_C: float = 2.0
+FAN_TEMPERATURE_DIFFERENCE_FULL_C: float = 8.0
+FAN_TEMPERATURE_DIFFERENCE_HYSTERESIS_C: float = 0.5
+FAN_HUMIDITY_START_PCT: float = 60.0
+FAN_HUMIDITY_FULL_PCT: float = 80.0
+FAN_HUMIDITY_HYSTERESIS_PCT: float = 3.0
+
+# Duty cycles, 0-100 %, shared by both controls. Many fans stall below about 20-30 %,
+# hence the minimum. OFF is the duty cycle below START.
+FAN_MIN_DUTY_PCT: float = 30.0
+FAN_MAX_DUTY_PCT: float = 100.0
+FAN_OFF_DUTY_PCT: float = 0.0
+# The least the fans run at while an input is missing or out of date (its sensor has
+# missed two readings), more if the other control asks for it. Left set when the
+# station stops.
+FAN_FAILSAFE_DUTY_PCT: float = 50.0
+
+# How often the duty cycle is recalculated. The sensors read every 60 s, so this only
+# limits how soon a new reading takes effect. Fan control isn't published on its own:
+# the health report includes its state (fan_* keys).
+FAN_CONTROL_INTERVAL_S: float = 10.0

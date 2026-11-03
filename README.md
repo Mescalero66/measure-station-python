@@ -2,7 +2,8 @@
 
 An always-on environmental measurement station for the Raspberry Pi 2B. It polls
 sensors and reads an MQ gas sensor board over the Pi's UART, then publishes
-everything as MQTT messages to an external broker over Ethernet.
+everything as MQTT messages to an external broker over Ethernet. It also switches fans by PWM
+from a temperature difference and the humidity.
 
 It is built to run unattended:
 
@@ -63,6 +64,7 @@ stalls the rest of the station.
 │   ├── watchdog.py                 # systemd sd_notify / watchdog
 │   ├── health.py                   # periodic station self-report
 │   ├── read_sensor.py              # prints one sensor's readings, for checking wiring
+│   ├── fan/                        # PWM fan control: duty-cycle curve, sysfs PWM output
 │   ├── drivers/                    # hardware drivers, verbatim from drivers-repo
 │   ├── sensors/                    # sensor classes (adapters for drivers/) + registry
 │   └── uart/                       # MQ gas board: serial reader + $PMQB decoder
@@ -98,6 +100,8 @@ stalls the rest of the station.
   calibration.
 - [Humidity Sensor](docs/sensors/humidity-sensor.md): the CHT8305 probe's wiring, accuracy
   and probe version.
+- [1-Wire Temperature Probe](docs/sensors/onewire-temperature-sensor.md): the DS18B20's
+  wiring, published values and bad-read checks.
 - [Light Sensor](docs/sensors/light-sensor.md): the BH1750's wiring, range and settings.
 - [Particulate Sensor](docs/sensors/particulate-sensor.md): the SEN62 or SEN65's wiring,
   published values (with the SEN65's VOC and NOx indices), status flags and operating limits.
@@ -108,6 +112,8 @@ stalls the rest of the station.
   handled.
 - [MQ Gas Board UART Interface](docs/uart-interface.md): the board's `$PMQB` sentence
   specification.
+- [Fan Control](docs/fan-control.md): switching fans by PWM from a temperature difference and
+  the humidity, the PWM pin, and what's published.
 - [Adding a Sensor](docs/adding-a-sensor.md): writing and registering a new sensor driver.
 
 **Development**

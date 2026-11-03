@@ -37,8 +37,20 @@ if command -v raspi-config >/dev/null; then
     else
         raspi-config nonint do_serial 2
     fi
+    # 1-wire (w1-gpio) on GPIO4, header pin 7, for the DS18B20 probe.
+    raspi-config nonint do_onewire 0
 else
-    echo "raspi-config not found; enable I2C and UART manually." >&2
+    echo "raspi-config not found; enable I2C, UART and 1-wire manually." >&2
+fi
+
+log "Enabling hardware PWM for the fans (GPIO18, header pin 12)"
+# pwmchip0 channel 0 on GPIO18; must match FAN_PWM_CHIP/FAN_PWM_CHANNEL in sysconfig.py.
+CONFIG_TXT=/boot/firmware/config.txt
+[[ -f $CONFIG_TXT ]] || CONFIG_TXT=/boot/config.txt
+if [[ ! -f $CONFIG_TXT ]]; then
+    echo "config.txt not found; add dtoverlay=pwm,pin=18,func=2 to it manually." >&2
+elif ! grep -q '^dtoverlay=pwm' "$CONFIG_TXT"; then
+    echo 'dtoverlay=pwm,pin=18,func=2' >> "$CONFIG_TXT"
 fi
 
 log "Enabling NTP time synchronisation"

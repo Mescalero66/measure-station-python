@@ -24,9 +24,9 @@ it. For the reasons behind each rule, see [MQTT Messages](mqtt-messages.md),
 | Direction | Station to broker only. The station connects out, publishes, and subscribes to nothing; it accepts no commands |
 | Station ID | `mstn-2b` (the first station; set on each station) |
 | Topics | `measure-station/<station>/<source>`, plus `measure-station/<station>/status` |
-| Payload | Compact UTF-8 JSON, 150 to 490 bytes (the status topic is plain text) |
+| Payload | Compact UTF-8 JSON, 150 to 675 bytes (the status topic is plain text) |
 | Delivery | QoS 1, at-least-once: expect duplicates |
-| Rate per station | About 16,400 messages a day (about 11 a minute) |
+| Rate per station | About 15,000 messages a day (about 10 a minute) |
 | Timestamps | UTC capture time in the payload (`ts`), never the arrival time |
 | De-duplication key | `(station, source, ts)` |
 | Backlog | Up to 1,500,000 messages (about 3 months) buffered on the station during an outage, sent oldest first when it reconnects |
@@ -46,7 +46,7 @@ Each entry is `source` · `section.key` (part, typical accuracy).
 
 | Quantity | Primary | Secondary | Meta |
 |---|---|---|---|
-| Air temperature | `temperature` · `values.temperature_c` (MCP9808, ±0.25 °C, steps of 0.0625 °C) | `humidity` · `values.temperature_c` (CHT8305, ±0.3 °C, ±0.5 °C below 0 °C); `particulates` · `values.temperature_c` (SEN62 or SEN65, ±0.45 °C); `co2` · `values.temperature_c` (SCD41, after a hand-set offset for its self-heating) | `barometer` · `meta.temperature_c` (BMP280 chip); `air-quality` · `meta.temperature_c` (AHT21, beside the ENS160's heater); `mqboard-*` · `meta.temperature_c` (the MQ board's compensation input); `cpu` · `values.temperature_c` (the Pi's processor) |
+| Air temperature | `temperature` · `values.temperature_c` (MCP9808, ±0.25 °C, steps of 0.0625 °C) | `humidity` · `values.temperature_c` (CHT8305, ±0.3 °C, ±0.5 °C below 0 °C); `particulates` · `values.temperature_c` (SEN62 or SEN65, ±0.45 °C); `co2` · `values.temperature_c` (SCD41, after a hand-set offset for its self-heating) | `barometer` · `meta.temperature_c` (BMP280 chip); `air-quality` · `meta.temperature_c` (AHT21, beside the ENS160's heater); `mqboard-*` · `meta.temperature_c` (the MQ board's compensation input); `health` · `values.cpu_temperature_c` (the Pi's processor) |
 | Relative humidity | `humidity` · `values.humidity_pct` (CHT8305, ±2 %RH) | `particulates` · `values.humidity_pct` (SEN62 or SEN65, ±4.5 %RH); `co2` · `values.humidity_pct` (SCD41) | `air-quality` · `meta.humidity_pct` (AHT21, beside the heater, so it reads dry) |
 | Pressure | `barometer` · `values.pressure_hpa` (BMP280, ±1 hPa absolute, ±0.12 hPa relative) | | `co2` · `meta.pressure_hpa` (the pressure the SCD41 was compensated with) |
 | CO2 | `co2` · `values.co2_ppm` (SCD41, ±(50 ppm + 2.5 %) up to 1000 ppm) | | |
@@ -61,7 +61,9 @@ Each entry is `source` · `section.key` (part, typical accuracy).
 - **Dew point and absolute humidity:** calculate them from `humidity`'s own
   `temperature_c` and `humidity_pct`, never from one sensor's humidity and another's
   temperature.
-- **`cpu` and `health`** describe the station itself, not the environment.
+- **`health`** describes the station itself, not the environment.
+- **The fans** the station switches aren't a source of their own: their state is in
+  `health` (the `fan_*` keys). The DS18B20 probe that fan control reads isn't published.
 
 ## Network and Time
 
@@ -135,7 +137,6 @@ max_queued_bytes 0
 
 | `source` | `sensor_type` | What it measures | Rate |
 |---|---|---|---|
-| `cpu` | `cpu_temperature` | The Pi's processor temperature | 1/min |
 | `air-quality` | `ens160_aht21` | VOCs, air quality index, estimated CO2 | 1/min |
 | `barometer` | `bmp280` | Air pressure | 1/min |
 | `co2` | `scd41` | CO2, temperature, humidity | 1/min |
@@ -267,8 +268,7 @@ Consequences for the server:
   and treat a missing source as a fault. `health`'s `task_restarts` rising at the same
   time confirms it's the station retrying.
 - **A source that has never sent anything** is a sensor that is disabled or failed at
-  start-up. `cpu` and `health` need no extra hardware, so they come from any working
-  station.
+  start-up. `health` needs no extra hardware, so it comes from any working station.
 
 **When data can be lost**
 
@@ -286,12 +286,6 @@ Nothing in the data marks these gaps.
 
 Precision is the number of decimals sent. "Number or null" means the sensor can report a
 value as unknown.
-
-### `cpu`
-
-| Section | Key | Type | Unit | Precision | Meaning |
-|---|---|---|---|---|---|
-| `values` | `temperature_c` | number | °C | 2 | The Pi's processor temperature |
 
 ### `temperature` (MCP9808)
 
@@ -420,7 +414,7 @@ About 260 bytes.
 ### `health`
 
 The station's self-report, once a minute. `sensor_type` is `station`; there's no `meta`.
-About 414 bytes (488 when `estimated`).
+About 600 bytes (675 when `estimated`).
 
 ```json
 {
@@ -436,14 +430,22 @@ About 414 bytes (488 when `estimated`).
     "task_restarts": 0,
     "clock_synced": true,
     "awaiting_time_sync": 0,
+    "cpu_usage_pct": 12.5,
+    "cpu_temperature_c": 48.31,
     "load_1m": 0.42,
     "disk_free_mb": 11234.5,
     "mem_available_mb": 702.3,
+    "ram_usage_pct": 24.2,
     "mqboard_up": true,
     "mqboard_last_line_age_s": 1.8,
     "mqboard_bad_lines": 0,
     "mqboard_stale_sensors": [],
-    "mqboard_held": 0
+    "mqboard_held": 0,
+    "fan_failsafe": false,
+    "fan_duty_pct": 65,
+    "fan_temp_diff_c": 5.25,
+    "fan_temp_diff_duty_pct": 65,
+    "fan_humidity_duty_pct": 0
   }
 }
 ```
@@ -456,18 +458,29 @@ About 414 bytes (488 when `estimated`).
 | `task_restarts` | integer | Task restarts since the service started (a sensor fault, a dropped connection) | It keeps rising |
 | `clock_synced` | boolean | Whether the station's clock is NTP-synchronised | `false` for more than a few minutes |
 | `awaiting_time_sync` | integer | Readings held on the station until its clock syncs | Above 0 for long: NTP is unreachable |
+| `cpu_usage_pct` | number or null | CPU usage across all 4 cores since the previous report, 0 to 100 % (1 decimal; `null` in the first report after a start) | It stays near 100 |
+| `cpu_temperature_c` | number | The Pi's processor temperature, in °C (2 decimals) | Above 80: the Pi slows itself down |
 | `load_1m` | number | CPU load average over 1 minute (the Pi 2B has 4 cores) | |
 | `disk_free_mb` | number | Free space on the SD card, in MB | It falls below a few hundred MB |
 | `mem_available_mb` | number | Available memory, in MB | |
+| `ram_usage_pct` | number | Memory in use (not available), 0 to 100 % (1 decimal) | It keeps rising: a memory leak |
 | `mqboard_up` | boolean | Whether the MQ board's data link is up | `false` |
 | `mqboard_last_line_age_s` | number or null | Seconds since the last valid line from the board (`null`: none yet) | Above 30 |
 | `mqboard_bad_lines` | integer | Corrupt lines from the board since the service started | It rises steadily: a wiring fault |
 | `mqboard_stale_sensors` | array of strings | Board sensors whose reading hasn't changed for 5 minutes, by board name (e.g. `["MQ4"]`) | Not empty |
 | `mqboard_held` | integer | Board readings held until they can be timestamped | Above 0 for more than 5 minutes |
+| `fan_failsafe` | boolean or null | Whether a fan control input is missing or out of date, so the fans run at least at the failsafe duty cycle (50 % by default) | `true` for more than a few minutes |
+| `fan_duty_pct` | integer or null | The duty cycle the fans are switched at, 0 to 100 %: the higher of the two below, raised to the failsafe while `fan_failsafe` is `true` | |
+| `fan_temp_diff_c` | number or null | The DS18B20 probe's temperature minus the `humidity` source's, in °C (2 decimals) | |
+| `fan_temp_diff_duty_pct` | integer or null | The duty cycle the temperature difference asks for | |
+| `fan_humidity_duty_pct` | integer or null | The duty cycle the `humidity` source's relative humidity asks for | |
 
-- `load_1m`, `disk_free_mb` and `mem_available_mb` are left out if the system can't
-  report them.
+- `cpu_temperature_c`, `load_1m`, `disk_free_mb`, `mem_available_mb` and `ram_usage_pct`
+  are left out if the system can't report them.
 - The `mqboard_*` keys are left out if the MQ board is disabled on the station.
+- The `fan_*` keys are left out if fan control is disabled. Each is `null` while it isn't
+  known: all of them while fan control isn't running (e.g. its PWM output failed), and a
+  control's `fan_*` values while its input is missing.
 - **Missing health is the main alarm.** If no `health` reading arrives for several
   minutes (by the server's own clock), the station is offline or stalled. Check the
   retained `status` topic too: `offline` after a clean stop or a dropped connection.
@@ -516,7 +529,7 @@ IGNORE`.)
 
 - **For charts**, a narrow table or view with one row per value is easier to query:
   `(station, source, section, key, ts, num_value, text_value)`.
-- **Volume:** about 16,400 messages a day per station, roughly 4 MB of JSON a day, or
+- **Volume:** about 15,000 messages a day per station, roughly 4 MB of JSON a day, or
   1.4 GB a year, before indexes or compression. An SD card on the server Pi faces the
   same wear as the station's; consider a USB SSD for the database.
 - **Keep `received_at`.** Its difference from `ts` shows outages and late data.

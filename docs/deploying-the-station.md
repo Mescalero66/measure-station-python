@@ -174,14 +174,19 @@ its solder pad on the underside is square. Odd-numbered pins are in that inner r
 even-numbered pins along the board's edge. Only these pins are used:
 
 ```text
-          inner row     edge row
- 3.3 V        [ 1]       [ 2]   5 V: never connect a sensor here
- SDA          [ 3]       [ 4]   5 V: never connect a sensor here
- SCL          [ 5]       [ 6]   GND (ground)
-              [ 7]       [ 8]
- GND          [ 9]       [10]   RX: the MQ gas board's TX wire
-              ...        ...
+              inner row     edge row
+ 3.3 V            [ 1]       [ 2]   5 V: never connect a sensor here
+ SDA              [ 3]       [ 4]   5 V: never connect a sensor here
+ SCL              [ 5]       [ 6]   GND (ground)
+ 1-wire (GPIO4)   [ 7]       [ 8]
+ GND              [ 9]       [10]   RX: the MQ gas board's TX wire
+                  [11]       [12]   PWM (GPIO18): the fans' MOSFET
+                  [13]       [14]   GND (ground)
+                  ...        ...
 ```
+
+Pin numbers and GPIO numbers are different things: **pin 7 is GPIO4, and pin 12 is
+GPIO18**. The settings files use GPIO numbers; this guide uses pin numbers.
 
 **The I2C sensors all share four wires.** Every one of the seven I2C sensor boards
 connects to the same four pins: **3.3 V (pin 1), GND (pin 6), SDA (pin 3) and SCL
@@ -220,6 +225,27 @@ signal, and run four wires from the rails to the Pi.
 - the board's **GND** to a Pi GND pin, e.g. **pin 9**.
 
 The board has its own power supply. See [MQ Gas Board](sensors/mq-gas-board.md).
+
+**The DS18B20 temperature probe** (1-wire) connects to its own pin, **pin 7 (GPIO4)**,
+not to the I2C rails:
+
+- red wire to **3.3 V** (pin 1, or pin 17), black wire to **GND** (e.g. pin 9);
+- yellow (data) wire to **pin 7**, with a **4.7 kΩ resistor between pin 7 and 3.3 V**.
+
+Pin 7 is the default because the installer enables the 1-wire bus there
+(`raspi-config`'s 1-wire option). See
+[1-Wire Temperature Probe](sensors/onewire-temperature-sensor.md).
+
+**The fans** are switched from **pin 12 (GPIO18)**, the default PWM pin:
+
+- pin 12 to the MOSFET's gate (through the gate resistor of your driver circuit);
+- the MOSFET's source to a Pi **GND** pin (e.g. **pin 14**), shared with the fans' supply
+  ground.
+
+Never power the fans from the Pi's pins: they need their own supply, switched by the
+MOSFET. The installer sets pin 12 up as PWM by adding `dtoverlay=pwm,pin=18,func=2` to
+`/boot/firmware/config.txt`. To use another pin, change that line (see
+[Fan Control](fan-control.md#the-pwm-output)) and reboot.
 
 **Placement.** The temperature and humidity sensors need shade and moving air, away from
 the Pi's own heat. The particulate sensor needs its air inlet and outlet clear, and must
@@ -348,7 +374,8 @@ Keep the capital letters, quotes and commas exactly as they are. Save and exit a
 
 ### Restart to Apply Everything
 
-The installer's changes to the sensor bus, serial port and watchdog take effect only
+The installer's changes to the sensor bus, serial port, 1-wire bus (pin 7), PWM pin
+(pin 12) and watchdog take effect only
 after a restart:
 
 ```bash
@@ -402,6 +429,23 @@ A missing number means that sensor isn't answering: check its four wires against
 table in [Step 3](#step-3-wire-the-sensors). If none appear at all, check the shared
 wires to pins 1, 3, 5 and 6.
 
+The DS18B20 probe on pin 7 isn't on the I2C bus. Check it separately:
+
+```bash
+ls /sys/bus/w1/devices/
+```
+
+It should list one `28-...` entry (its ID). If there's none, check the probe's three
+wires and the 4.7 kΩ resistor on pin 7.
+
+The PWM pin for the fans (pin 12) is ready if this lists `pwmchip0`:
+
+```bash
+ls /sys/class/pwm/
+```
+
+To test the fans by hand, see [Fan Control](fan-control.md#the-pwm-output).
+
 ### 3. Do the Sensors Give Sensible Readings?
 
 This tool reads one sensor every 2 seconds and prints the result. With no name, it lists
@@ -440,7 +484,7 @@ This shows the station's log and keeps adding new lines. Press **Ctrl+C** to sto
 
 | You see | Meaning |
 |---|---|
-| `Running tasks: recorder, publisher, timesync, sensor:cpu, ...` | The station started. Every sensor should be in the list |
+| `Running tasks: recorder, publisher, timesync, sensor:air-quality, ...` | The station started. Every sensor should be in the list |
 | `System clock not yet synchronised` | The Pi hasn't got the time from the network yet. Readings are kept and re-timed later. It should stop within a minute or two |
 | `MQTT link down` and `Reconnecting to MQTT broker` | The broker isn't reachable. **Expected until the server Pi exists**: readings wait on the SD card |
 | `Connected to MQTT broker` | Readings are being sent |
@@ -463,7 +507,7 @@ sudo sqlite3 /var/lib/measure-station/outbox.sqlite3 'select count(*) from outbo
 ```
 
 This prints the number of readings waiting to be sent. Without a broker it rises by about
-11 a minute. Once a broker is connected, it stays near zero.
+10 a minute. Once a broker is connected, it stays near zero.
 
 **The station is deployed.** It now runs by itself, and restarts itself after a power cut
 or a fault.

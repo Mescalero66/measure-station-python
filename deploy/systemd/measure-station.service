@@ -38,8 +38,9 @@ TimeoutStopSec=60
 StateDirectory=measure-station
 StateDirectoryMode=0750
 
-# Hardening. Hardware access (/dev/i2c-*, /dev/serial*) comes from the service
-# user's group membership (i2c, dialout, gpio), so PrivateDevices must stay off.
+# Hardening. Hardware access (/dev/i2c-*, /dev/serial*, /sys/class/pwm) comes from the
+# service user's group membership (i2c, dialout, gpio), so PrivateDevices must stay off,
+# and ProtectKernelTunables (which makes /sys read-only) must too.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

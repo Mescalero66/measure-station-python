@@ -14,6 +14,7 @@ from measure_station.sensors.bh1750_i2c import Bh1750Sensor
 from measure_station.sensors.bmp280_i2c import Bmp280Sensor
 from measure_station.sensors.cht8305_i2c import Cht8305Sensor
 from measure_station.sensors.cpu_temperature import CpuTemperatureSensor
+from measure_station.sensors.ds18b20_1wire import Ds18b20Sensor
 from measure_station.sensors.ens160_aht21_i2c import Ens160Aht21Sensor
 from measure_station.sensors.mcp9808_i2c import Mcp9808Sensor
 from measure_station.sensors.scd41_i2c import Scd41Sensor
@@ -25,6 +26,7 @@ SENSOR_TYPES: dict[str, type[Sensor]] = {
     "bmp280": Bmp280Sensor,
     "cht8305": Cht8305Sensor,
     "cpu_temperature": CpuTemperatureSensor,
+    "ds18b20": Ds18b20Sensor,
     "ens160_aht21": Ens160Aht21Sensor,
     "mcp9808": Mcp9808Sensor,
     "scd41": Scd41Sensor,
@@ -37,6 +39,9 @@ def create_sensor(config: Mapping[str, Any]) -> Sensor:
     """Build a sensor from one ``sysconfig.SENSORS`` entry."""
     options = dict(config)
     options.pop("enabled", None)
+    publish = options.pop("publish", True)
+    if not isinstance(publish, bool):
+        raise ValueError("publish must be True or False")
     type_name = options.pop("type", None)
     try:
         cls = SENSOR_TYPES[type_name]
@@ -46,6 +51,7 @@ def create_sensor(config: Mapping[str, Any]) -> Sensor:
         ) from None
     sensor = cls(**options)
     sensor.sensor_type = type_name
+    sensor.publish = publish
     return sensor
 
 

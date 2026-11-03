@@ -19,13 +19,21 @@ from typing import Any
 
 from measure_station import __version__, sysconfig
 from measure_station.clock import ClockState
+from measure_station.fan import (
+    FanCurve,
+    FanInput,
+    FanSettings,
+    FanState,
+    SysfsPwm,
+    control_fan,
+)
 from measure_station.health import report_health
 from measure_station.logging_setup import configure_logging
 from measure_station.models import MessageEncoder, Reading
 from measure_station.ntp_setup import invalid_servers
 from measure_station.publisher import MqttPublisher, MqttSettings
 from measure_station.recorder import record_readings
-from measure_station.sensors import LatestValues, create_sensor, poll_sensor
+from measure_station.sensors import LatestValues, Sensor, create_sensor, poll_sensor
 from measure_station.storage import Outbox
 from measure_station.supervisor import Supervisor
 from measure_station.timesync import monitor_clock_sync
@@ -171,7 +179,7 @@ def build_supervisor(
         stale_after_s=stale_s,
     )
 
-    latest = LatestValues()  # lets a sensor use another's readings
+    latest = LatestValues()  # lets a sensor (or fan control) use a sensor's readings
     for sensor_cfg in _enabled(cfg.SENSORS):
         sensor = create_sensor(sensor_cfg)
         sensor.latest_values = latest
@@ -180,6 +188,22 @@ def build_supervisor(
             functools.partial(poll_sensor, sensor, queue, read_timeout_s=cfg.SENSOR_READ_TIMEOUT_S),
             # A slow sensor legitimately beats only once per interval.
             stale_after_s=max(stale_s, 2 * sensor.interval_s + cfg.SENSOR_READ_TIMEOUT_S),
+        )
+
+    fan_state = None
+    if cfg.FAN_ENABLED:
+        settings = fan_settings(cfg)
+        fan_state = FanState(settings.inputs)
+        output = SysfsPwm(
+            chip=cfg.FAN_PWM_CHIP,
+            channel=cfg.FAN_PWM_CHANNEL,
+            frequency_hz=cfg.FAN_PWM_FREQUENCY_HZ,
+            inverted=cfg.FAN_PWM_INVERTED,
+        )
+        supervisor.add(
+            "fan",
+            functools.partial(control_fan, output, latest, fan_state, settings=settings),
+            stale_after_s=max(stale_s, 2 * cfg.FAN_CONTROL_INTERVAL_S),
         )
 
     if mqboard is not None:
@@ -205,6 +229,7 @@ def build_supervisor(
             supervisor,
             clock,
             mqboard,
+            fan_state,
             source=cfg.HEALTH_SOURCE_NAME,
             interval_s=cfg.HEALTH_INTERVAL_S,
             data_dir=cfg.DATA_DIR,
@@ -251,6 +276,8 @@ def validate_config(cfg: Any) -> list[str]:
                 )
     if cfg.MQBOARD_ENABLED:
         sources.extend(_mqboard_decoder(cfg, {}).sources())
+    if cfg.FAN_ENABLED:
+        errors.extend(_fan_errors(cfg, sensors))
 
     seen: set[str] = set()
     for name in sources:
@@ -270,9 +297,66 @@ def validate_config(cfg: Any) -> list[str]:
             f"TASK_STALE_AFTER_S ({cfg.TASK_STALE_AFTER_S}) must exceed TASK_RESTART_MAX_S, "
             f"MQTT_RECONNECT_MAX_S, MQTT_IDLE_POLL_S and TIME_SYNC_POLL_S ({longest_wait})"
         )
-    min_workers = 5 if cfg.MQBOARD_ENABLED else 4  # the board reader holds one permanently
+    # The board reader holds one permanently; fan control needs one besides the others.
+    min_workers = 4 + bool(cfg.MQBOARD_ENABLED) + bool(cfg.FAN_ENABLED)
     if min_workers > cfg.THREAD_POOL_WORKERS:
         errors.append(f"THREAD_POOL_WORKERS ({cfg.THREAD_POOL_WORKERS}) must be >= {min_workers}")
+    return errors
+
+
+def fan_settings(cfg: Any) -> FanSettings:
+    """The fan control settings; raises ValueError if they're invalid."""
+
+    def curve(start: float, full: float, hysteresis: float) -> FanCurve:
+        return FanCurve(
+            start=start,
+            full=full,
+            hysteresis=hysteresis,
+            min_duty_pct=cfg.FAN_MIN_DUTY_PCT,
+            max_duty_pct=cfg.FAN_MAX_DUTY_PCT,
+            off_duty_pct=cfg.FAN_OFF_DUTY_PCT,
+        )
+
+    temp_diff = FanInput(
+        name="temp_diff",
+        key="temp_diff_c",
+        sources=(cfg.FAN_TEMPERATURE_SOURCE, cfg.FAN_REFERENCE_SOURCE),
+        field="temperature_c",
+        curve=curve(
+            cfg.FAN_TEMPERATURE_DIFFERENCE_START_C,
+            cfg.FAN_TEMPERATURE_DIFFERENCE_FULL_C,
+            cfg.FAN_TEMPERATURE_DIFFERENCE_HYSTERESIS_C,
+        ),
+        report_value=True,  # derived here: no sensor publishes it
+    )
+    humidity = FanInput(
+        name="humidity",
+        key="humidity_pct",
+        sources=(cfg.FAN_HUMIDITY_SOURCE,),
+        field="humidity_pct",
+        curve=curve(
+            cfg.FAN_HUMIDITY_START_PCT, cfg.FAN_HUMIDITY_FULL_PCT, cfg.FAN_HUMIDITY_HYSTERESIS_PCT
+        ),
+    )
+    return FanSettings(
+        inputs=(temp_diff, humidity),
+        failsafe_duty_pct=cfg.FAN_FAILSAFE_DUTY_PCT,
+        interval_s=cfg.FAN_CONTROL_INTERVAL_S,
+    )
+
+
+def _fan_errors(cfg: Any, sensors: list[Sensor]) -> list[str]:
+    try:
+        settings = fan_settings(cfg)
+    except ValueError as exc:
+        return [f"fan control: {exc}"]
+    errors = []
+    if cfg.FAN_PWM_FREQUENCY_HZ <= 0:
+        errors.append("FAN_PWM_FREQUENCY_HZ must be > 0")
+    names = {sensor.name for sensor in sensors}
+    for source in settings.input_sources():
+        if source not in names:
+            errors.append(f"fan control uses {source!r}, which isn't an enabled sensor")
     return errors
 
 

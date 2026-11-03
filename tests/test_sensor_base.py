@@ -123,3 +123,33 @@ def test_latest_values_expire() -> None:
     latest = LatestValues()
     latest.record("barometer", {"pressure_hpa": 1006.5}, valid_for_s=-1)
     assert latest.get("barometer", "pressure_hpa") is None
+
+
+def test_unpublished_sensor_only_records_latest_values() -> None:
+    sensor = create_sensor(
+        {
+            "type": "simulated",
+            "name": "probe",
+            "interval_s": 0.01,
+            "channels": ["temperature_c"],
+            "publish": False,
+        }
+    )
+    sensor.latest_values = LatestValues()
+
+    async def scenario() -> asyncio.Queue[Reading]:
+        queue: asyncio.Queue[Reading] = asyncio.Queue()
+        task = asyncio.create_task(
+            poll_sensor(sensor, queue, read_timeout_s=1, heartbeat=Heartbeat("x", None))
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        return queue
+
+    assert asyncio.run(scenario()).empty()
+    assert sensor.latest_values.get("probe", "temperature_c") is not None
+
+
+def test_publish_must_be_a_bool() -> None:
+    with pytest.raises(ValueError, match="publish"):
+        create_sensor({"type": "simulated", "name": "x", "interval_s": 1, "publish": "no"})

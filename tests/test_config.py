@@ -34,6 +34,7 @@ def test_unknown_sensor_type_rejected() -> None:
 def test_disabled_entries_are_not_validated() -> None:
     cfg = _config(
         STATION_ID="pi-01",
+        FAN_ENABLED=False,  # its inputs aren't in SENSORS
         SENSORS=[{"type": "nope", "name": "x", "interval_s": 1, "enabled": False}],
     )
     assert validate_config(cfg) == []
@@ -65,12 +66,41 @@ def test_mqboard_prefix_must_be_topic_safe() -> None:
 def test_pressure_source_must_be_another_enabled_sensor() -> None:
     co2 = {"type": "scd41", "name": "co2", "interval_s": 60}
     barometer = {"type": "bmp280", "name": "barometer", "interval_s": 60}
-    ok = _config(STATION_ID="pi-01", SENSORS=[co2 | {"pressure_source": "barometer"}, barometer])
+    ok = _config(
+        STATION_ID="pi-01",
+        FAN_ENABLED=False,  # its inputs aren't in SENSORS
+        SENSORS=[co2 | {"pressure_source": "barometer"}, barometer],
+    )
     assert validate_config(ok) == []
     for sensors in (
         [co2 | {"pressure_source": "barometr"}, barometer],  # misspelt
         [co2 | {"pressure_source": "barometer"}, barometer | {"enabled": False}],
         [co2 | {"pressure_source": "co2"}],  # itself
     ):
-        errors = validate_config(_config(STATION_ID="pi-01", SENSORS=sensors))
+        errors = validate_config(_config(STATION_ID="pi-01", FAN_ENABLED=False, SENSORS=sensors))
         assert any("isn't another enabled sensor" in e for e in errors), sensors
+
+
+def test_fan_inputs_must_be_enabled_sensors() -> None:
+    for overrides in (
+        {"FAN_REFERENCE_SOURCE": "humidty"},  # misspelt
+        {"FAN_HUMIDITY_SOURCE": "humidty"},  # both controls' inputs are needed
+    ):
+        errors = validate_config(_config(STATION_ID="pi-01", **overrides))
+        assert any("'humidty', which isn't an enabled sensor" in e for e in errors), overrides
+
+
+def test_invalid_fan_settings_rejected() -> None:
+    for overrides in (
+        {"FAN_HUMIDITY_START_PCT": 80.0},  # start == full
+        {"FAN_MIN_DUTY_PCT": 120.0},
+        {"FAN_FAILSAFE_DUTY_PCT": -1.0},
+        {"FAN_TEMPERATURE_SOURCE": "humidity"},  # the same as the reference
+    ):
+        errors = validate_config(_config(STATION_ID="pi-01", **overrides))
+        assert errors, overrides
+
+
+def test_disabled_fan_isnt_validated() -> None:
+    cfg = _config(STATION_ID="pi-01", FAN_ENABLED=False, FAN_HUMIDITY_START_PCT=80.0)
+    assert validate_config(cfg) == []
