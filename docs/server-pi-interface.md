@@ -62,8 +62,8 @@ Each entry is `source` · `section.key` (part, typical accuracy).
   `temperature_c` and `humidity_pct`, never from one sensor's humidity and another's
   temperature.
 - **`health`** describes the station itself, not the environment.
-- **The exhaust fans** the station switches aren't a source of their own: their state is
-  in `health` (the `fan_*` keys). The DS18B20 probe that fan control reads isn't
+- **The fans** the station switches (exhaust at the top, intake at the bottom) aren't a
+  source of their own: their state is in `health` (the `fan_*` keys). The DS18B20 probe that fan control reads isn't
   published.
 
 ## Network and Time
@@ -443,9 +443,10 @@ About 600 bytes (675 when `estimated`).
     "mqboard_stale_sensors": [],
     "mqboard_held": 0,
     "fan_failsafe": false,
-    "fan_on": true,
-    "fan_temp_diff_c": 8.25,
-    "fan_temp_diff_on": true
+    "fan_exhaust_duty_pct": 100,
+    "fan_intake_duty_pct": 0,
+    "fan_temp_diff_c": 1.25,
+    "fan_fog": false
   }
 }
 ```
@@ -469,17 +470,18 @@ About 600 bytes (675 when `estimated`).
 | `mqboard_bad_lines` | integer | Corrupt lines from the board since the service started | It rises steadily: a wiring fault |
 | `mqboard_stale_sensors` | array of strings | Board sensors whose reading hasn't changed for 5 minutes, by board name (e.g. `["MQ4"]`) | Not empty |
 | `mqboard_held` | integer | Board readings held until they can be timestamped | Above 0 for more than 5 minutes |
-| `fan_failsafe` | boolean or null | Whether a reading fan control needs (the DS18B20 probe's or the `humidity` source's temperature) is missing or out of date, so the fans run regardless (unless the station is set to leave them off) | `true` for more than a few minutes |
-| `fan_on` | boolean or null | Whether the exhaust fans are running (at full speed): `fan_temp_diff_on` is `true`, `fan_failsafe` is `true`, or they haven't yet run their minimum time (5 minutes by default) | |
-| `fan_temp_diff_c` | number or null | The DS18B20 probe's temperature (top of the enclosure) minus the `humidity` source's (bottom), in °C (2 decimals) | |
-| `fan_temp_diff_on` | boolean or null | Whether the temperature difference has turned the fans on | |
+| `fan_failsafe` | boolean or null | Whether a reading fan control needs (the DS18B20 probe's temperature, or the `humidity` source's temperature or humidity) is missing or out of date, so the exhaust fans run at 100 % and the intake fans are off | `true` for more than a few minutes |
+| `fan_exhaust_duty_pct` | integer or null | The exhaust fans' (top) duty cycle, 0 to 100 %. Normally on (100 %, or lower if the station runs them by speed); 0 in fog | |
+| `fan_intake_duty_pct` | integer or null | The intake fans' (bottom) duty cycle, 0 to 100 %. Normally 0; above 0 while heat builds up. **Data quality:** while above 0, the enclosure pushes air out past the sensors rather than drawing outside air in, so readings from sources inside it may be slightly warm (and their relative humidity slightly low) | Above 0 for hours: an exhaust fan may have failed |
+| `fan_temp_diff_c` | number or null | The DS18B20 probe's temperature (top of the enclosure) minus the `humidity` source's (bottom), in °C (2 decimals) | It keeps rising |
+| `fan_fog` | boolean or null | Whether the `humidity` source's humidity has turned fog mode on, which turns both fan sets off (unless heat mode or the failsafe overrides it) | |
 
 - `cpu_temperature_c`, `load_1m`, `disk_free_mb`, `mem_available_mb` and `ram_usage_pct`
   are left out if the system can't report them.
 - The `mqboard_*` keys are left out if the MQ board is disabled on the station.
 - The `fan_*` keys are left out if fan control is disabled. Each is `null` while it isn't
-  known: all of them while fan control isn't running (e.g. its PWM output failed), and
-  `fan_temp_diff_c` and `fan_temp_diff_on` while a reading they need is missing.
+  known: all of them while fan control isn't running (e.g. a PWM output failed), and
+  `fan_temp_diff_c` and `fan_fog` while a reading they need is missing.
 - **Missing health is the main alarm.** If no `health` reading arrives for several
   minutes (by the server's own clock), the station is offline or stalled. Check the
   retained `status` topic too: `offline` after a clean stop or a dropped connection.

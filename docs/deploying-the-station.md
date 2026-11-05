@@ -180,13 +180,15 @@ even-numbered pins along the board's edge. Only these pins are used:
  SCL              [ 5]       [ 6]   GND (ground)
  1-wire (GPIO4)   [ 7]       [ 8]
  GND              [ 9]       [10]   RX: the MQ gas board's TX wire
-                  [11]       [12]   PWM (GPIO18): the fan driver's IN1
+                  [11]       [12]   PWM (GPIO18): the exhaust fans' MOSFET
                   [13]       [14]   GND (ground)
                   ...        ...
+ PWM (GPIO19):    [35]       [36]
+ the intake fans' MOSFET
 ```
 
-Pin numbers and GPIO numbers are different things: **pin 7 is GPIO4, and pin 12 is
-GPIO18**. The settings files use GPIO numbers; this guide uses pin numbers.
+Pin numbers and GPIO numbers are different things: **pin 7 is GPIO4, pin 12 is GPIO18,
+and pin 35 is GPIO19**. The settings files use GPIO numbers; this guide uses pin numbers.
 
 **The I2C sensors all share four wires.** Every one of the seven I2C sensor boards
 connects to the same four pins: **3.3 V (pin 1), GND (pin 6), SDA (pin 3) and SCL
@@ -236,37 +238,41 @@ Pin 7 is the default because the installer enables the 1-wire bus there
 (`raspi-config`'s 1-wire option). See
 [1-Wire Temperature Probe](sensors/onewire-temperature-sensor.md).
 
-**The exhaust fans** are switched on and off from **pin 12 (GPIO18)**, the default PWM
-pin, through an **L298N motor driver board** powered from the 5 V supply. The intake
-fans, which always run, connect straight to the 5 V supply instead.
+**The fans** are two sets, each switched by its own **N-channel MOSFET** from its own
+PWM pin, and powered from the 5 V supply:
 
-| L298N terminal | Connects to |
+| Fan set | Where | Pi pin |
+|---|---|---|
+| **Exhaust** | top of the enclosure | **pin 12 (GPIO18)** |
+| **Intake** | bottom of the enclosure | **pin 35 (GPIO19)** |
+
+Each set is wired the same way, with its fans in parallel:
+
+| From | To |
 |---|---|
-| **+12V** (motor supply) | the 5 V supply's **+** |
-| **GND** | the 5 V supply's **−**, and a Pi **GND** pin (e.g. **pin 14**) |
-| **+5V** | the 5 V supply's **+** too: see the jumper below |
-| **IN1** | Pi **pin 12** |
-| **IN2** | **GND** (any GND terminal on the board) |
-| **ENA** | leave its jumper on (keeps channel A enabled) |
-| **OUT1** | the exhaust fans' **red (+)** wires |
-| **OUT2** | the exhaust fans' **black (−)** wires |
+| the fans' **red (+)** wires | the 5 V supply's **+** |
+| the fans' **black (−)** wires | the MOSFET's **drain** |
+| the MOSFET's **source** | the 5 V supply's **−** |
+| the Pi's pin (12 or 35) | the MOSFET's **gate**, through a **100 Ω resistor** |
+| the MOSFET's **gate** | the MOSFET's **source**, through a **10 kΩ resistor** |
+| a **diode** (e.g. 1N5819 or SS14) | across the fans: its **stripe (cathode) to 5 V +**, the other end to the drain |
 
-- **Take off the 5 V jumper** (the "5V-EN" jumper next to the power terminals). With it
-  on, the board makes its own 5 V from the +12V terminal, which needs about 7 V or more.
-  On a 5 V supply that leaves the driver's logic below its 4.5 V minimum. With the jumper
-  off, the **+5V** terminal is an input, fed from the supply as in the table.
-- **The fans get about 3 to 3.5 V, not 5 V.** The L298N loses 1.5 to 2 V in its output
-  transistors. Check that both exhaust fans start reliably from standstill: see
-  [Step 6](#step-6-check-that-it-works).
-- **Grounds must be joined:** the supply's −, the L298N's GND and the Pi's GND. Without
-  that, pin 12's signal has nothing to be measured against.
+- **Use a logic-level MOSFET that switches fully at 2.5 V,** such as the AO3400A or the
+  IRLML6244. Many common MOSFETs (e.g. the IRF540) need 10 V on the gate and barely
+  turn on from the Pi's 3.3 V.
+- **The 10 kΩ resistor keeps the fans off** while the Pi boots, until the station takes
+  over. **The diode** absorbs the voltage spike from the fan motors each time they
+  switch off; without it, the MOSFET can fail.
+- **Grounds must be joined:** the supply's − and a Pi **GND** pin (e.g. **pin 14** or
+  **pin 39**). Without that, the Pi's signal has nothing to be measured against.
 - **Never power the fans from the Pi's pins.** They need the supply's own 5 V.
-- With IN1 high and IN2 low the fans run; with both low they stop. So no inversion is
-  needed: leave `FAN_PWM_INVERTED` at `False`.
+- Wired this way, the fans run while the pin is high, so leave `FAN_PWM_INVERTED` at
+  `False`.
 
-The installer sets pin 12 up as PWM by adding `dtoverlay=pwm,pin=18,func=2` to
-`/boot/firmware/config.txt`. To use another pin, change that line (see
-[Fan Control](fan-control.md#the-pwm-output)) and reboot.
+The installer sets pins 12 and 35 up as PWM by adding
+`dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2` to `/boot/firmware/config.txt`. To
+use other pins, change that line (see [Fan Control](fan-control.md#the-pwm-outputs)) and
+reboot.
 
 **Placement.** The temperature and humidity sensors need shade and moving air, away from
 the Pi's own heat. The particulate sensor needs its air inlet and outlet clear, and must
@@ -379,14 +385,13 @@ Open the main settings file:
 sudo nano /opt/measure-station/src/measure_station/sysconfig.py
 ```
 
-Change only these, if they apply. Use **Ctrl+W** to find each one. The first two are in
-the **Fallback values** section near the top of the file: every value the station uses in
+Change only these, if they apply. Use **Ctrl+W** to find each one. The first is in the
+**Fallback values** section near the top of the file: every value the station uses in
 place of a measurement it doesn't have.
 
 | Find | Change it when | How |
 |---|---|---|
 | `FALLBACK_ALTITUDE_M: float = 75` | Always | Replace `75` with the station's height above sea level, in metres. The CO2 sensor uses it when the pressure sensor is unavailable |
-| `FALLBACK_FANS_ON: bool = True` | You want the fans off, not on, while a fan input is missing | Change `True` to `False` |
 | `"enabled": True,` | A sensor isn't fitted | Change `True` to `False` in that sensor's section, or the log shows an error for it every minute |
 | `MQBOARD_ENABLED: bool = True` | The MQ gas board isn't connected | Change `True` to `False` |
 
@@ -398,8 +403,8 @@ Keep the capital letters, quotes and commas exactly as they are. Save and exit a
 
 ### Restart to Apply Everything
 
-The installer's changes to the sensor bus, serial port, 1-wire bus (pin 7), PWM pin
-(pin 12) and watchdog take effect only
+The installer's changes to the sensor bus, serial port, 1-wire bus (pin 7), PWM pins
+(pins 12 and 35) and watchdog take effect only
 after a restart:
 
 ```bash
@@ -462,16 +467,16 @@ ls /sys/bus/w1/devices/
 It should list one `28-...` entry (its ID). If there's none, check the probe's three
 wires and the 4.7 kΩ resistor on pin 7.
 
-The PWM pin for the fans (pin 12) is ready if this lists `pwmchip0`:
+The PWM pins for the fans (pins 12 and 35) are ready if this lists `pwmchip0`:
 
 ```bash
 ls /sys/class/pwm/
 ```
 
-To test the fans by hand, see [Fan Control](fan-control.md#the-pwm-output). Switch them
-on and off a few times: both exhaust fans should start from standstill every time. If one
-only hums or twitches, the L298N's voltage loss leaves it too little to start (see
-[Step 3](#step-3-wire-the-sensors)).
+To test the fans by hand, see [Fan Control](fan-control.md#the-pwm-outputs). Switch each
+set on and off a few times: every fan should start from standstill every time. For
+`FAN_MODE = "analog"`, also check that the exhaust fans keep turning at
+`FAN_ANALOG_MIN_DUTY_PCT` (50 % by default) once started at 100 %; if not, raise it.
 
 ### 3. Do the Sensors Give Sensible Readings?
 

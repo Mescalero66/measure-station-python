@@ -1,8 +1,9 @@
 """Hardware PWM output through the Linux sysfs PWM interface (``/sys/class/pwm``).
 
 The Pi's PWM controller is enabled with a device tree overlay, which also chooses the
-pin, e.g. in config.txt ``dtoverlay=pwm,pin=18,func=2`` (GPIO18, header pin 12, as
-PWM channel 0 of pwmchip0). See docs/fan-control.md.
+pins, e.g. in config.txt ``dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2`` (GPIO18,
+header pin 12, as PWM channel 0 of pwmchip0; GPIO19, header pin 35, as channel 1). See
+docs/fan-control.md.
 
 On Raspberry Pi OS, a udev rule gives the gpio group write access to an exported
 channel, a moment after it's exported. The service user is in that group.
@@ -55,7 +56,7 @@ class SysfsPwm:
         if not self._chip_dir.is_dir():
             raise OSError(
                 f"{self._chip_dir} not found: is the PWM overlay enabled in config.txt "
-                "(e.g. dtoverlay=pwm,pin=18,func=2)?"
+                "(e.g. dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2)?"
             )
         if not self._dir.is_dir():
             (self._chip_dir / "export").write_text(str(self._channel))

@@ -85,6 +85,7 @@ def test_fan_inputs_must_be_enabled_sensors() -> None:
     for overrides in (
         {"FAN_TEMPERATURE_SOURCE": "humidty"},  # misspelt
         {"FAN_REFERENCE_SOURCE": "humidty"},
+        {"FAN_HUMIDITY_SOURCE": "humidty"},
     ):
         errors = validate_config(_config(STATION_ID="pi-01", **overrides))
         assert any("'humidty', which isn't an enabled sensor" in e for e in errors), overrides
@@ -93,9 +94,15 @@ def test_fan_inputs_must_be_enabled_sensors() -> None:
 def test_invalid_fan_settings_rejected() -> None:
     for overrides in (
         {"FAN_TEMPERATURE_DIFFERENCE_OFF_C": 8.0},  # on == off
+        {"FAN_FOG_OFF_PCT": 95.0},
         {"FAN_CONTROL_INTERVAL_S": 0},
-        {"FAN_MIN_ON_S": -1},
+        {"FAN_INTAKE_MIN_ON_S": -1},
         {"FAN_TEMPERATURE_SOURCE": "humidity"},  # the same as the reference
+        {"FAN_INTAKE_PWM_CHANNEL": 0},  # the same as the exhaust's
+        {"FAN_MODE": "digital"},
+        {"FAN_ANALOG_MIN_DUTY_PCT": 120.0},
+        {"FAN_KICKSTART_S": -1},
+        {"FAN_PWM_FREQUENCY_HZ": 0},
     ):
         errors = validate_config(_config(STATION_ID="pi-01", **overrides))
         assert errors, overrides

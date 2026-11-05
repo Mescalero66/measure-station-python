@@ -50,13 +50,11 @@ STATION_ID: str = _env("STATION_ID") or "mstn-2b"
 # the standard pressure at this altitude (published as "comp_src": "alt"). Set it for
 # each site: every 100 m of error costs about 1 % of the CO2 reading while it's in use.
 FALLBACK_ALTITUDE_M: float = 75
-# Whether the exhaust fans run (True) or stay off (False) while a fan control input (the
-# DS18B20 probe or the CHT8305) is missing. Also left set when the station stops
-# (docs/fan-control.md).
-FALLBACK_FANS_ON: bool = True
 #
 # Sensors with no fallback: the air quality board (ENS160) always compensates with the
-# AHT21 on the same board, and the MQ gas board compensates on the board itself.
+# AHT21 on the same board, and the MQ gas board compensates on the board itself. Fan
+# control has a fixed failsafe instead: exhaust fans on, intake fans off
+# (docs/fan-control.md).
 
 # --------------------------------------------------------------------------- #
 # Logging
@@ -340,39 +338,64 @@ MQBOARD_CORRUPT_LOG_INTERVAL_S: float = 60.0
 # --------------------------------------------------------------------------- #
 # Fan control (PWM)
 # --------------------------------------------------------------------------- #
-# The 2-wire exhaust fans, switched fully on or off by the Pi's hardware PWM output (0 or
-# 100 %, through a driver stage) from a temperature difference (docs/fan-control.md).
-# The PWM overlay in config.txt chooses the pin: deploy/install.sh adds
-# dtoverlay=pwm,pin=18,func=2 (GPIO18, header pin 12), which is pwmchip0 channel 0.
+# Two sets of 2-wire fans, each switched by its own Pi hardware PWM output and MOSFET
+# (docs/fan-control.md):
+#   exhaust (top):    normally on, drawing outside air in through the bottom vents and
+#                     past the sensors; off in fog.
+#   intake (bottom):  normally off; on with the exhaust fans when heat builds up.
+# Failsafe (a reading missing, or the station stopped): exhaust on, intake off.
+# The PWM overlay in config.txt chooses the pins: deploy/install.sh adds
+# dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2, which puts pwmchip0 channel 0 on
+# GPIO18 (header pin 12) and channel 1 on GPIO19 (header pin 35).
 FAN_ENABLED: bool = True
 FAN_PWM_CHIP: int = 0
-FAN_PWM_CHANNEL: int = 0
-# True if the driver stage inverts the signal (fan on while the pin is low, e.g. a
+FAN_EXHAUST_PWM_CHANNEL: int = 0  # GPIO18, header pin 12
+FAN_INTAKE_PWM_CHANNEL: int = 1  # GPIO19, header pin 35
+# True if the driver stages invert the signal (fan on while the pin is low, e.g. a
 # P-channel MOSFET on the fan's positive supply).
 FAN_PWM_INVERTED: bool = False
 
-# The temperature difference: FAN_TEMPERATURE_SOURCE's "temperature_c" minus
-# FAN_REFERENCE_SOURCE's, in °C. By default the top of the enclosure minus the bottom.
+# How fast a fan set that's on runs:
+#   "binary": always 100 %.
+#   "analog": by the heat difference (below): FAN_ANALOG_MIN_DUTY_PCT at or below
+#             FAN_TEMPERATURE_DIFFERENCE_OFF_C, rising in a straight line to 100 % at
+#             FAN_TEMPERATURE_DIFFERENCE_ON_C. So in normal running the exhaust fans idle
+#             at the minimum, and the intake fans always start at 100 %. 100 % while a
+#             reading is missing.
+FAN_MODE: str = "binary"
+# Analog only: the lowest speed, 0-100 %: the exhaust fans' speed in normal running. It
+# must keep them turning once started (see the kick-start below).
+FAN_ANALOG_MIN_DUTY_PCT: float = 50.0
+# A fan set that turns on runs at 100 % for this long first, then at its speed, so a
+# low speed can't leave it stalled from standstill. 0 = no kick-start.
+FAN_KICKSTART_S: float = 3.0
+# Analog only (at 0 and 100 % the output is steady): low enough for a 2-wire fan's motor
+# electronics to keep up. If the fans hum or tick, try 25-50 Hz.
+FAN_PWM_FREQUENCY_HZ: float = 100
+
+# Heat: FAN_TEMPERATURE_SOURCE's "temperature_c" minus FAN_REFERENCE_SOURCE's, in °C;
+# by default the top of the enclosure minus the bottom. The intake fans turn on when it
+# reaches ON, and off when it reaches OFF; in between, they stay as they were.
 FAN_TEMPERATURE_SOURCE: str = "temperature-probe"  # the DS18B20, at the top
 FAN_REFERENCE_SOURCE: str = "humidity"  # the CHT8305, at the bottom
-
-# The fans turn on when the difference reaches ON, and off when it reaches OFF; in
-# between, they stay as they were. ON may be below OFF, for fans that run as the
-# difference falls (e.g. ON -5, OFF 0: the probe colder).
 FAN_TEMPERATURE_DIFFERENCE_ON_C: float = 8.0
 FAN_TEMPERATURE_DIFFERENCE_OFF_C: float = 3.0
+# Once on, the intake fans stay on at least this long, so they don't switch with each
+# 1-minute reading. 5 minutes lets the parts that hold the heat (power supply, Pi,
+# regulators) cool too, not only the air, so the difference doesn't spring straight back.
+FAN_INTAKE_MIN_ON_S: float = 300.0
 
-# Once on, for any reason (including the failsafe, and so at every start), the fans stay
-# on at least this long, so they don't switch on and off with each 1-minute reading.
-# 5 minutes lets the parts that hold the heat (power supply, Pi, regulators) cool too,
-# not only the air, so the temperature difference doesn't spring straight back.
-FAN_MIN_ON_S: float = 300.0
+# Fog: FAN_HUMIDITY_SOURCE's "humidity_pct" (the CHT8305, in the air drawn in at the
+# bottom). Fog mode turns both fan sets off when it reaches ON, and ends when it reaches
+# OFF, so the electronics' heat keeps the enclosure drier and fewer mist droplets are
+# drawn in. Heat building up overrides it. With the fans off, the CHT8305's air warms a
+# little and it reads drier, so each state is held at least FAN_FOG_MIN_S.
+FAN_HUMIDITY_SOURCE: str = "humidity"  # the CHT8305
+FAN_FOG_ON_PCT: float = 95.0
+FAN_FOG_OFF_PCT: float = 90.0
+FAN_FOG_MIN_S: float = 1800.0
 
-# Whether the fans run while an input is missing. Set FALLBACK_FANS_ON under
-# "Fallback values" at the top of this file, not here.
-FAN_FAILSAFE_ON: bool = FALLBACK_FANS_ON
-
-# How often the difference is re-evaluated. The sensors read every 60 s, so this only
+# How often the readings are re-evaluated. The sensors read every 60 s, so this only
 # limits how soon a new reading takes effect. Fan control isn't published on its own:
 # the health report includes its state (fan_* keys).
 FAN_CONTROL_INTERVAL_S: float = 10.0

@@ -43,14 +43,16 @@ else
     echo "raspi-config not found; enable I2C, UART and 1-wire manually." >&2
 fi
 
-log "Enabling hardware PWM for the fans (GPIO18, header pin 12)"
-# pwmchip0 channel 0 on GPIO18; must match FAN_PWM_CHIP/FAN_PWM_CHANNEL in sysconfig.py.
+log "Enabling hardware PWM for the fans (GPIO18 and GPIO19, header pins 12 and 35)"
+# pwmchip0 channel 0 on GPIO18 (exhaust), channel 1 on GPIO19 (intake); must match
+# FAN_PWM_CHIP, FAN_EXHAUST_PWM_CHANNEL and FAN_INTAKE_PWM_CHANNEL in sysconfig.py.
+PWM_OVERLAY='dtoverlay=pwm-2chan,pin=18,func=2,pin2=19,func2=2'
 CONFIG_TXT=/boot/firmware/config.txt
 [[ -f $CONFIG_TXT ]] || CONFIG_TXT=/boot/config.txt
 if [[ ! -f $CONFIG_TXT ]]; then
-    echo "config.txt not found; add dtoverlay=pwm,pin=18,func=2 to it manually." >&2
+    echo "config.txt not found; add $PWM_OVERLAY to it manually." >&2
 elif ! grep -q '^dtoverlay=pwm' "$CONFIG_TXT"; then
-    echo 'dtoverlay=pwm,pin=18,func=2' >> "$CONFIG_TXT"
+    echo "$PWM_OVERLAY" >> "$CONFIG_TXT"
 fi
 
 log "Enabling NTP time synchronisation"

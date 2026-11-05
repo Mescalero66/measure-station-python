@@ -2,9 +2,9 @@
 
 An always-on environmental measurement station for the Raspberry Pi 2B. It polls
 sensors and reads an MQ gas sensor board over the Pi's UART, then publishes
-everything as MQTT messages to an external broker over Ethernet. It also switches the
-enclosure's exhaust fans on and off from the temperature difference between its top and
-bottom.
+everything as MQTT messages to an external broker over Ethernet. It also runs the
+enclosure's exhaust and intake fans from the temperature difference between its top and
+bottom, and the humidity.
 
 It is built to run unattended:
 
@@ -65,7 +65,7 @@ stalls the rest of the station.
 │   ├── watchdog.py                 # systemd sd_notify / watchdog
 │   ├── health.py                   # periodic station self-report
 │   ├── read_sensor.py              # prints one sensor's readings, for checking wiring
-│   ├── fan/                        # fan control: on/off switching, sysfs PWM output
+│   ├── fan/                        # exhaust and intake fan control, sysfs PWM outputs
 │   ├── drivers/                    # hardware drivers, verbatim from drivers-repo
 │   ├── sensors/                    # sensor classes (adapters for drivers/) + registry
 │   └── uart/                       # MQ gas board: serial reader + $PMQB decoder
@@ -113,8 +113,9 @@ stalls the rest of the station.
   handled.
 - [MQ Gas Board UART Interface](docs/uart-interface.md): the board's `$PMQB` sentence
   specification.
-- [Fan Control](docs/fan-control.md): switching the exhaust fans on and off from the
-  enclosure's temperature difference, the PWM pin, and what's published.
+- [Fan Control](docs/fan-control.md): running the exhaust and intake fans from the
+  enclosure's temperature difference and the humidity, the PWM pins, and what's
+  published.
 - [Adding a Sensor](docs/adding-a-sensor.md): writing and registering a new sensor driver.
 
 **Development**

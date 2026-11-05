@@ -193,12 +193,18 @@ def build_supervisor(
     if cfg.FAN_ENABLED:
         settings = fan_settings(cfg)
         fan_state = FanState()
-        output = SysfsPwm(
-            chip=cfg.FAN_PWM_CHIP, channel=cfg.FAN_PWM_CHANNEL, inverted=cfg.FAN_PWM_INVERTED
+        exhaust, intake = (
+            SysfsPwm(
+                chip=cfg.FAN_PWM_CHIP,
+                channel=channel,
+                frequency_hz=cfg.FAN_PWM_FREQUENCY_HZ,
+                inverted=cfg.FAN_PWM_INVERTED,
+            )
+            for channel in (cfg.FAN_EXHAUST_PWM_CHANNEL, cfg.FAN_INTAKE_PWM_CHANNEL)
         )
         supervisor.add(
             "fan",
-            functools.partial(control_fan, output, latest, fan_state, settings=settings),
+            functools.partial(control_fan, exhaust, intake, latest, fan_state, settings=settings),
             stale_after_s=max(stale_s, 2 * cfg.FAN_CONTROL_INTERVAL_S),
         )
 
@@ -302,15 +308,22 @@ def validate_config(cfg: Any) -> list[str]:
 
 def fan_settings(cfg: Any) -> FanSettings:
     """The fan control settings; raises ValueError if they're invalid."""
+    if cfg.FAN_MODE not in ("binary", "analog"):
+        raise ValueError(f"FAN_MODE must be 'binary' or 'analog', not {cfg.FAN_MODE!r}")
     return FanSettings(
         source=cfg.FAN_TEMPERATURE_SOURCE,
         reference=cfg.FAN_REFERENCE_SOURCE,
-        switch=FanSwitch(
+        heat=FanSwitch(
             on=cfg.FAN_TEMPERATURE_DIFFERENCE_ON_C, off=cfg.FAN_TEMPERATURE_DIFFERENCE_OFF_C
         ),
-        failsafe_on=cfg.FAN_FAILSAFE_ON,
+        humidity_source=cfg.FAN_HUMIDITY_SOURCE,
+        fog=FanSwitch(on=cfg.FAN_FOG_ON_PCT, off=cfg.FAN_FOG_OFF_PCT),
         interval_s=cfg.FAN_CONTROL_INTERVAL_S,
-        min_on_s=cfg.FAN_MIN_ON_S,
+        intake_min_on_s=cfg.FAN_INTAKE_MIN_ON_S,
+        fog_min_s=cfg.FAN_FOG_MIN_S,
+        analog=cfg.FAN_MODE == "analog",
+        min_duty_pct=cfg.FAN_ANALOG_MIN_DUTY_PCT,
+        kickstart_s=cfg.FAN_KICKSTART_S,
     )
 
 
@@ -320,6 +333,10 @@ def _fan_errors(cfg: Any, sensors: list[Sensor]) -> list[str]:
     except ValueError as exc:
         return [f"fan control: {exc}"]
     errors = []
+    if cfg.FAN_PWM_FREQUENCY_HZ <= 0:
+        errors.append("FAN_PWM_FREQUENCY_HZ must be > 0")
+    if cfg.FAN_EXHAUST_PWM_CHANNEL == cfg.FAN_INTAKE_PWM_CHANNEL:
+        errors.append("FAN_EXHAUST_PWM_CHANNEL and FAN_INTAKE_PWM_CHANNEL must differ")
     names = {sensor.name for sensor in sensors}
     for source in settings.sources():
         if source not in names:
