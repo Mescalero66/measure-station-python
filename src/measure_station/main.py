@@ -20,10 +20,9 @@ from typing import Any
 from measure_station import __version__, sysconfig
 from measure_station.clock import ClockState
 from measure_station.fan import (
-    FanCurve,
-    FanInput,
     FanSettings,
     FanState,
+    FanSwitch,
     SysfsPwm,
     control_fan,
 )
@@ -193,12 +192,9 @@ def build_supervisor(
     fan_state = None
     if cfg.FAN_ENABLED:
         settings = fan_settings(cfg)
-        fan_state = FanState(settings.inputs)
+        fan_state = FanState()
         output = SysfsPwm(
-            chip=cfg.FAN_PWM_CHIP,
-            channel=cfg.FAN_PWM_CHANNEL,
-            frequency_hz=cfg.FAN_PWM_FREQUENCY_HZ,
-            inverted=cfg.FAN_PWM_INVERTED,
+            chip=cfg.FAN_PWM_CHIP, channel=cfg.FAN_PWM_CHANNEL, inverted=cfg.FAN_PWM_INVERTED
         )
         supervisor.add(
             "fan",
@@ -306,42 +302,15 @@ def validate_config(cfg: Any) -> list[str]:
 
 def fan_settings(cfg: Any) -> FanSettings:
     """The fan control settings; raises ValueError if they're invalid."""
-
-    def curve(start: float, full: float, hysteresis: float) -> FanCurve:
-        return FanCurve(
-            start=start,
-            full=full,
-            hysteresis=hysteresis,
-            min_duty_pct=cfg.FAN_MIN_DUTY_PCT,
-            max_duty_pct=cfg.FAN_MAX_DUTY_PCT,
-            off_duty_pct=cfg.FAN_OFF_DUTY_PCT,
-        )
-
-    temp_diff = FanInput(
-        name="temp_diff",
-        key="temp_diff_c",
-        sources=(cfg.FAN_TEMPERATURE_SOURCE, cfg.FAN_REFERENCE_SOURCE),
-        field="temperature_c",
-        curve=curve(
-            cfg.FAN_TEMPERATURE_DIFFERENCE_START_C,
-            cfg.FAN_TEMPERATURE_DIFFERENCE_FULL_C,
-            cfg.FAN_TEMPERATURE_DIFFERENCE_HYSTERESIS_C,
-        ),
-        report_value=True,  # derived here: no sensor publishes it
-    )
-    humidity = FanInput(
-        name="humidity",
-        key="humidity_pct",
-        sources=(cfg.FAN_HUMIDITY_SOURCE,),
-        field="humidity_pct",
-        curve=curve(
-            cfg.FAN_HUMIDITY_START_PCT, cfg.FAN_HUMIDITY_FULL_PCT, cfg.FAN_HUMIDITY_HYSTERESIS_PCT
-        ),
-    )
     return FanSettings(
-        inputs=(temp_diff, humidity),
-        failsafe_duty_pct=cfg.FAN_FAILSAFE_DUTY_PCT,
+        source=cfg.FAN_TEMPERATURE_SOURCE,
+        reference=cfg.FAN_REFERENCE_SOURCE,
+        switch=FanSwitch(
+            on=cfg.FAN_TEMPERATURE_DIFFERENCE_ON_C, off=cfg.FAN_TEMPERATURE_DIFFERENCE_OFF_C
+        ),
+        failsafe_on=cfg.FAN_FAILSAFE_ON,
         interval_s=cfg.FAN_CONTROL_INTERVAL_S,
+        min_on_s=cfg.FAN_MIN_ON_S,
     )
 
 
@@ -351,10 +320,8 @@ def _fan_errors(cfg: Any, sensors: list[Sensor]) -> list[str]:
     except ValueError as exc:
         return [f"fan control: {exc}"]
     errors = []
-    if cfg.FAN_PWM_FREQUENCY_HZ <= 0:
-        errors.append("FAN_PWM_FREQUENCY_HZ must be > 0")
     names = {sensor.name for sensor in sensors}
-    for source in settings.input_sources():
+    for source in settings.sources():
         if source not in names:
             errors.append(f"fan control uses {source!r}, which isn't an enabled sensor")
     return errors

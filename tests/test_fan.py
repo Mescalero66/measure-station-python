@@ -3,121 +3,73 @@ from pathlib import Path
 
 import pytest
 
-from measure_station.fan import FanCurve, FanInput, FanSettings, FanState, SysfsPwm, control_fan
+from measure_station.fan import FanSettings, FanState, FanSwitch, SysfsPwm, control_fan
 from measure_station.sensors import LatestValues
 from measure_station.supervisor import Heartbeat
 
 
-def _curve(**overrides) -> FanCurve:
-    options = {
-        "start": 60.0,
-        "full": 80.0,
-        "hysteresis": 3.0,
-        "min_duty_pct": 30.0,
-        "max_duty_pct": 100.0,
-        "off_duty_pct": 0.0,
-    }
-    return FanCurve(**(options | overrides))
-
-
-def _temperature_difference() -> FanInput:
-    return FanInput(
-        name="temp_diff",
-        key="temp_diff_c",
-        sources=("temperature-probe", "humidity"),
-        field="temperature_c",
-        curve=_curve(start=2.0, full=8.0, hysteresis=0.5),
-        report_value=True,
-    )
-
-
-def _humidity() -> FanInput:
-    return FanInput(
-        name="humidity",
-        key="humidity_pct",
-        sources=("humidity",),
-        field="humidity_pct",
-        curve=_curve(),
-    )
-
-
 def _settings(**overrides) -> FanSettings:
     options = {
-        "inputs": (_temperature_difference(), _humidity()),
-        "failsafe_duty_pct": 50.0,
+        "source": "temperature-probe",
+        "reference": "humidity",
+        "switch": FanSwitch(on=8.0, off=4.0),
+        "failsafe_on": True,
         "interval_s": 0.01,
+        "min_on_s": 0,
     }
     return FanSettings(**(options | overrides))
 
 
-# --------------------------------------------------------------------------- the curve
+# --------------------------------------------------------------------------- the switch
 
 
-def test_curve_ramps_from_start_to_full() -> None:
-    curve = _curve()
-    assert curve.duty(50, running=False) == (0, False)
-    assert curve.duty(60, running=False) == (30, True)
-    assert curve.duty(70, running=False) == (65, True)
-    assert curve.duty(80, running=False) == (100, True)
-    assert curve.duty(95, running=False) == (100, True)
+def test_switch_turns_on_at_on_and_off_at_off() -> None:
+    switch = FanSwitch(on=80, off=70)
+    assert switch.is_on(69, was_on=False) is False
+    assert switch.is_on(75, was_on=False) is False  # between: stays off
+    assert switch.is_on(80, was_on=False) is True
+    assert switch.is_on(75, was_on=True) is True  # between: stays on
+    assert switch.is_on(70, was_on=True) is False
+    assert switch.is_on(95, was_on=True) is True
 
 
-def test_curve_turns_off_only_past_the_hysteresis() -> None:
-    curve = _curve()
-    assert curve.duty(58, running=True) == (30, True)  # within 3 of start: stays on
-    assert curve.duty(56.9, running=True) == (0, False)
-    assert curve.duty(58, running=False) == (0, False)  # and doesn't turn on there
+def test_switch_can_run_as_the_input_falls() -> None:
+    switch = FanSwitch(on=-5, off=0)
+    assert switch.is_on(1, was_on=False) is False
+    assert switch.is_on(-3, was_on=False) is False
+    assert switch.is_on(-5, was_on=False) is True
+    assert switch.is_on(-1, was_on=True) is True
+    assert switch.is_on(0, was_on=True) is False
 
 
-def test_curve_can_run_as_the_input_falls() -> None:
-    curve = _curve(start=0, full=-5, hysteresis=0.5)
-    assert curve.duty(1, running=False) == (0, False)
-    assert curve.duty(-2.5, running=False) == (65, True)
-    assert curve.duty(0.4, running=True) == (30, True)
-    assert curve.duty(0.6, running=True) == (0, False)
+def test_switch_on_and_off_must_differ() -> None:
+    with pytest.raises(ValueError, match="differ"):
+        FanSwitch(on=70, off=70)
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
-        {"full": 60.0},
-        {"hysteresis": -1},
-        {"min_duty_pct": 101},
-        {"min_duty_pct": 80, "max_duty_pct": 50},
-    ],
-)
-def test_invalid_curves_rejected(bad: dict) -> None:
-    with pytest.raises(ValueError):
-        _curve(**bad)
-
-
-# --------------------------------------------------------------------------- inputs
+# --------------------------------------------------------------------------- settings
 
 
 def test_temperature_difference_is_probe_minus_reference() -> None:
     latest = LatestValues()
-    fan_input = _temperature_difference()
+    settings = _settings()
     latest.record("temperature-probe", {"temperature_c": 25.5}, valid_for_s=60)
-    assert fan_input.measure(latest) is None
-    assert fan_input.missing(latest) == ["humidity"]
+    assert settings.temperature_difference(latest) is None
+    assert settings.missing(latest) == ["humidity"]
     latest.record("humidity", {"temperature_c": 21.25, "humidity_pct": 70}, valid_for_s=60)
-    assert fan_input.measure(latest) == 4.25
-    assert fan_input.missing(latest) == []
+    assert settings.temperature_difference(latest) == 4.25
+    assert settings.missing(latest) == []
 
 
-def test_humidity_input() -> None:
-    latest = LatestValues()
-    latest.record("humidity", {"temperature_c": 21.25, "humidity_pct": 70.1}, valid_for_s=60)
-    assert _humidity().measure(latest) == 70.1
-
-
-def test_input_sources_are_listed_once() -> None:
-    assert _settings().input_sources() == ["temperature-probe", "humidity"]
-
-
-def test_temperature_sources_must_differ() -> None:
+def test_sources_must_differ() -> None:
     with pytest.raises(ValueError, match="differ"):
-        FanInput("t", "t_c", ("humidity", "humidity"), "temperature_c", _curve())
+        _settings(reference="temperature-probe")
+
+
+@pytest.mark.parametrize("bad", [{"interval_s": 0}, {"min_on_s": -1}])
+def test_invalid_settings_rejected(bad: dict) -> None:
+    with pytest.raises(ValueError):
+        _settings(**bad)
 
 
 # --------------------------------------------------------------------------- the task
@@ -146,7 +98,7 @@ async def _run(pwm: FakePwm, settings: FanSettings, steps) -> tuple[list[dict], 
     Returns the health values before each step and after the last, then after it stops.
     """
     latest = LatestValues()
-    state = FanState(settings.inputs)
+    state = FanState()
     task = asyncio.create_task(
         control_fan(pwm, latest, state, settings=settings, heartbeat=Heartbeat("fan", None))
     )
@@ -162,75 +114,84 @@ async def _run(pwm: FakePwm, settings: FanSettings, steps) -> tuple[list[dict], 
     return reports, state.health_values()
 
 
-def _readings(probe_c: float | None, air_c: float, humidity_pct: float, valid_for_s: float = 60):
+def _readings(probe_c: float | None, air_c: float, valid_for_s: float = 60):
     def step(latest: LatestValues) -> None:
         if probe_c is not None:
             latest.record("temperature-probe", {"temperature_c": probe_c}, valid_for_s=valid_for_s)
-        latest.record(
-            "humidity",
-            {"temperature_c": air_c, "humidity_pct": humidity_pct},
-            valid_for_s=valid_for_s,
-        )
+        latest.record("humidity", {"temperature_c": air_c}, valid_for_s=valid_for_s)
 
     return step
 
 
-def _report(failsafe, duty, difference_c, difference_duty, humidity_duty) -> dict:
+def _report(failsafe, on, difference_c, difference_on) -> dict:
     return {
         "fan_failsafe": failsafe,
-        "fan_duty_pct": duty,
+        "fan_on": on,
         "fan_temp_diff_c": difference_c,
-        "fan_temp_diff_duty_pct": difference_duty,
-        "fan_humidity_duty_pct": humidity_duty,
+        "fan_temp_diff_on": difference_on,
     }
 
 
-def test_the_higher_demand_wins() -> None:
+def test_the_temperature_difference_switches_the_fans() -> None:
     pwm = FakePwm()
     reports, stopped = asyncio.run(
         _run(
             pwm,
             _settings(),
             [
-                _readings(25, 20, 50),  # difference 5 °C: 65 %; humidity off
-                _readings(21, 20, 75),  # difference off; humidity 75 %: 82.5, rounded to 82 %
-                _readings(21, 20, 50),  # both off
+                _readings(30, 20),  # 10 °C: on
+                _readings(26, 20),  # 6 °C, between off and on: stays on
+                _readings(23, 20),  # 3 °C: off
+                _readings(26, 20),  # 6 °C: stays off
+                _readings(29, 20),  # 9 °C: on
             ],
         )
     )
-    # Failsafe until the first readings; then the controls; failsafe again on stop.
-    assert pwm.duties == [50, 65, 82, 0, 50]
+    # Failsafe (on) until the first readings; failsafe again on stop.
+    assert pwm.duties == [100, 0, 100, 100]
     assert pwm.closed
     assert reports == [
-        _report(True, 50, None, None, None),
-        _report(False, 65, 5, 65, 0),
-        _report(False, 82, 1, 0, 82),
-        _report(False, 0, 1, 0, 0),
+        _report(True, True, None, None),
+        _report(False, True, 10, True),
+        _report(False, True, 6, True),
+        _report(False, False, 3, False),
+        _report(False, False, 6, False),
+        _report(False, True, 9, True),
     ]
     # Unknown once fan control has stopped.
-    assert stopped == _report(None, None, None, None, None)
+    assert stopped == _report(None, None, None, None)
 
 
-def test_a_missing_input_raises_the_duty_to_at_least_the_failsafe() -> None:
+def test_fans_stay_on_for_the_minimum_on_time() -> None:
+    pwm = FakePwm()
+    off = _readings(21, 20)  # 1 °C: off
+    # On at the start (failsafe), then off at 0.05 s: held on until 0.3 s.
+    reports, _ = asyncio.run(_run(pwm, _settings(min_on_s=0.3), [off] * 8))
+    assert pwm.duties == [100, 0, 100]
+    assert reports[2] == _report(False, True, 1, False)  # at 0.1 s: held on
+    assert reports[-1] == _report(False, False, 1, False)  # at 0.45 s: off
+
+
+def test_a_missing_input_turns_the_fans_on() -> None:
+    pwm = FakePwm()
+    reports, _ = asyncio.run(_run(pwm, _settings(), [_readings(None, 20)]))
+    assert pwm.duties == [100, 100]
+    assert reports[1:] == [_report(True, True, None, None)]
+
+
+def test_without_failsafe_a_missing_input_leaves_the_fans_off() -> None:
     pwm = FakePwm()
     reports, _ = asyncio.run(
-        _run(
-            pwm,
-            _settings(),
-            [
-                _readings(None, 20, 50),  # no probe; humidity off: failsafe
-                _readings(None, 20, 80),  # no probe; humidity 80 %: above the failsafe
-            ],
-        )
+        _run(pwm, _settings(failsafe_on=False), [_readings(None, 20), _readings(30, 20)])
     )
-    assert pwm.duties == [50, 100, 50]
-    assert reports[1:] == [_report(True, 50, None, None, 0), _report(True, 100, None, None, 100)]
+    assert pwm.duties == [0, 100, 0]
+    assert reports[1:] == [_report(True, False, None, None), _report(False, True, 10, True)]
 
 
 def test_fans_go_to_failsafe_when_inputs_go_stale() -> None:
     pwm = FakePwm()
-    asyncio.run(_run(pwm, _settings(), [_readings(21, 20, 50), _readings(21, 20, 50, -1)]))
-    assert pwm.duties == [50, 0, 50, 50]
+    asyncio.run(_run(pwm, _settings(), [_readings(21, 20), _readings(21, 20, -1)]))
+    assert pwm.duties == [100, 0, 100, 100]
 
 
 def test_a_failed_open_raises_for_the_supervisor() -> None:

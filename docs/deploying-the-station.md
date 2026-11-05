@@ -180,7 +180,7 @@ even-numbered pins along the board's edge. Only these pins are used:
  SCL              [ 5]       [ 6]   GND (ground)
  1-wire (GPIO4)   [ 7]       [ 8]
  GND              [ 9]       [10]   RX: the MQ gas board's TX wire
-                  [11]       [12]   PWM (GPIO18): the fans' MOSFET
+                  [11]       [12]   PWM (GPIO18): the fan driver's IN1
                   [13]       [14]   GND (ground)
                   ...        ...
 ```
@@ -236,14 +236,35 @@ Pin 7 is the default because the installer enables the 1-wire bus there
 (`raspi-config`'s 1-wire option). See
 [1-Wire Temperature Probe](sensors/onewire-temperature-sensor.md).
 
-**The fans** are switched from **pin 12 (GPIO18)**, the default PWM pin:
+**The exhaust fans** are switched on and off from **pin 12 (GPIO18)**, the default PWM
+pin, through an **L298N motor driver board** powered from the 5 V supply. The intake
+fans, which always run, connect straight to the 5 V supply instead.
 
-- pin 12 to the MOSFET's gate (through the gate resistor of your driver circuit);
-- the MOSFET's source to a Pi **GND** pin (e.g. **pin 14**), shared with the fans' supply
-  ground.
+| L298N terminal | Connects to |
+|---|---|
+| **+12V** (motor supply) | the 5 V supply's **+** |
+| **GND** | the 5 V supply's **−**, and a Pi **GND** pin (e.g. **pin 14**) |
+| **+5V** | the 5 V supply's **+** too: see the jumper below |
+| **IN1** | Pi **pin 12** |
+| **IN2** | **GND** (any GND terminal on the board) |
+| **ENA** | leave its jumper on (keeps channel A enabled) |
+| **OUT1** | the exhaust fans' **red (+)** wires |
+| **OUT2** | the exhaust fans' **black (−)** wires |
 
-Never power the fans from the Pi's pins: they need their own supply, switched by the
-MOSFET. The installer sets pin 12 up as PWM by adding `dtoverlay=pwm,pin=18,func=2` to
+- **Take off the 5 V jumper** (the "5V-EN" jumper next to the power terminals). With it
+  on, the board makes its own 5 V from the +12V terminal, which needs about 7 V or more.
+  On a 5 V supply that leaves the driver's logic below its 4.5 V minimum. With the jumper
+  off, the **+5V** terminal is an input, fed from the supply as in the table.
+- **The fans get about 3 to 3.5 V, not 5 V.** The L298N loses 1.5 to 2 V in its output
+  transistors. Check that both exhaust fans start reliably from standstill: see
+  [Step 6](#step-6-check-that-it-works).
+- **Grounds must be joined:** the supply's −, the L298N's GND and the Pi's GND. Without
+  that, pin 12's signal has nothing to be measured against.
+- **Never power the fans from the Pi's pins.** They need the supply's own 5 V.
+- With IN1 high and IN2 low the fans run; with both low they stop. So no inversion is
+  needed: leave `FAN_PWM_INVERTED` at `False`.
+
+The installer sets pin 12 up as PWM by adding `dtoverlay=pwm,pin=18,func=2` to
 `/boot/firmware/config.txt`. To use another pin, change that line (see
 [Fan Control](fan-control.md#the-pwm-output)) and reboot.
 
@@ -365,7 +386,7 @@ place of a measurement it doesn't have.
 | Find | Change it when | How |
 |---|---|---|
 | `FALLBACK_ALTITUDE_M: float = 75` | Always | Replace `75` with the station's height above sea level, in metres. The CO2 sensor uses it when the pressure sensor is unavailable |
-| `FALLBACK_FAN_DUTY_PCT: float = 50.0` | You want a different fan speed when a fan input is missing | Replace `50.0` with a duty cycle from 0 to 100 |
+| `FALLBACK_FANS_ON: bool = True` | You want the fans off, not on, while a fan input is missing | Change `True` to `False` |
 | `"enabled": True,` | A sensor isn't fitted | Change `True` to `False` in that sensor's section, or the log shows an error for it every minute |
 | `MQBOARD_ENABLED: bool = True` | The MQ gas board isn't connected | Change `True` to `False` |
 
@@ -447,7 +468,10 @@ The PWM pin for the fans (pin 12) is ready if this lists `pwmchip0`:
 ls /sys/class/pwm/
 ```
 
-To test the fans by hand, see [Fan Control](fan-control.md#the-pwm-output).
+To test the fans by hand, see [Fan Control](fan-control.md#the-pwm-output). Switch them
+on and off a few times: both exhaust fans should start from standstill every time. If one
+only hums or twitches, the L298N's voltage loss leaves it too little to start (see
+[Step 3](#step-3-wire-the-sensors)).
 
 ### 3. Do the Sensors Give Sensible Readings?
 

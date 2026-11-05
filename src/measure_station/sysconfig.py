@@ -50,10 +50,10 @@ STATION_ID: str = _env("STATION_ID") or "mstn-2b"
 # the standard pressure at this altitude (published as "comp_src": "alt"). Set it for
 # each site: every 100 m of error costs about 1 % of the CO2 reading while it's in use.
 FALLBACK_ALTITUDE_M: float = 75
-# The least the fans run at, 0-100 %, while a fan control input (the DS18B20 probe or
-# the CHT8305) is missing; more if the other control asks for it. Also left set when the
-# station stops (docs/fan-control.md).
-FALLBACK_FAN_DUTY_PCT: float = 50.0
+# Whether the exhaust fans run (True) or stay off (False) while a fan control input (the
+# DS18B20 probe or the CHT8305) is missing. Also left set when the station stops
+# (docs/fan-control.md).
+FALLBACK_FANS_ON: bool = True
 #
 # Sensors with no fallback: the air quality board (ENS160) always compensates with the
 # AHT21 on the same board, and the MQ gas board compensates on the board itself.
@@ -340,49 +340,39 @@ MQBOARD_CORRUPT_LOG_INTERVAL_S: float = 60.0
 # --------------------------------------------------------------------------- #
 # Fan control (PWM)
 # --------------------------------------------------------------------------- #
-# 2-wire fans switched by the Pi's hardware PWM (through a MOSFET), their duty cycle
-# set from the sensors' latest values (docs/fan-control.md). The PWM overlay in
-# config.txt chooses the pin: deploy/install.sh adds dtoverlay=pwm,pin=18,func=2
-# (GPIO18, header pin 12), which is pwmchip0 channel 0.
+# The 2-wire exhaust fans, switched fully on or off by the Pi's hardware PWM output (0 or
+# 100 %, through a driver stage) from a temperature difference (docs/fan-control.md).
+# The PWM overlay in config.txt chooses the pin: deploy/install.sh adds
+# dtoverlay=pwm,pin=18,func=2 (GPIO18, header pin 12), which is pwmchip0 channel 0.
 FAN_ENABLED: bool = True
 FAN_PWM_CHIP: int = 0
 FAN_PWM_CHANNEL: int = 0
-# Switching a 2-wire fan's power: low enough for its motor electronics to keep up.
-# If the fan hums or ticks, try 25-50 Hz.
-FAN_PWM_FREQUENCY_HZ: float = 100
 # True if the driver stage inverts the signal (fan on while the pin is low, e.g. a
 # P-channel MOSFET on the fan's positive supply).
 FAN_PWM_INVERTED: bool = False
 
-# Two controls run together, and the fans run at the higher of their duty cycles:
-#   temperature difference: temperature of FAN_TEMPERATURE_SOURCE minus that of
-#                           FAN_REFERENCE_SOURCE, in °C (their "temperature_c").
-#   humidity:               relative humidity of FAN_HUMIDITY_SOURCE, in % ("humidity_pct").
-FAN_TEMPERATURE_SOURCE: str = "temperature-probe"  # the DS18B20
-FAN_REFERENCE_SOURCE: str = "humidity"  # the CHT8305
-FAN_HUMIDITY_SOURCE: str = "humidity"  # the CHT8305
+# The temperature difference: FAN_TEMPERATURE_SOURCE's "temperature_c" minus
+# FAN_REFERENCE_SOURCE's, in °C. By default the top of the enclosure minus the bottom.
+FAN_TEMPERATURE_SOURCE: str = "temperature-probe"  # the DS18B20, at the top
+FAN_REFERENCE_SOURCE: str = "humidity"  # the CHT8305, at the bottom
 
-# The fan curve for each control. The fans turn on at FAN_MIN_DUTY_PCT when the input
-# reaches START, rising in a straight line to FAN_MAX_DUTY_PCT at FULL. They turn off
-# again only once the input is HYSTERESIS back below START. FULL may be below START,
-# for fans that run as the input falls (e.g. START 0, FULL -5: the probe colder).
-FAN_TEMPERATURE_DIFFERENCE_START_C: float = 2.0
-FAN_TEMPERATURE_DIFFERENCE_FULL_C: float = 8.0
-FAN_TEMPERATURE_DIFFERENCE_HYSTERESIS_C: float = 0.5
-FAN_HUMIDITY_START_PCT: float = 60.0
-FAN_HUMIDITY_FULL_PCT: float = 80.0
-FAN_HUMIDITY_HYSTERESIS_PCT: float = 3.0
+# The fans turn on when the difference reaches ON, and off when it reaches OFF; in
+# between, they stay as they were. ON may be below OFF, for fans that run as the
+# difference falls (e.g. ON -5, OFF 0: the probe colder).
+FAN_TEMPERATURE_DIFFERENCE_ON_C: float = 8.0
+FAN_TEMPERATURE_DIFFERENCE_OFF_C: float = 3.0
 
-# Duty cycles, 0-100 %, shared by both controls. Many fans stall below about 20-30 %,
-# hence the minimum. OFF is the duty cycle below START.
-FAN_MIN_DUTY_PCT: float = 30.0
-FAN_MAX_DUTY_PCT: float = 100.0
-FAN_OFF_DUTY_PCT: float = 0.0
-# The failsafe duty cycle, for a missing input. Set FALLBACK_FAN_DUTY_PCT under
+# Once on, for any reason (including the failsafe, and so at every start), the fans stay
+# on at least this long, so they don't switch on and off with each 1-minute reading.
+# 5 minutes lets the parts that hold the heat (power supply, Pi, regulators) cool too,
+# not only the air, so the temperature difference doesn't spring straight back.
+FAN_MIN_ON_S: float = 300.0
+
+# Whether the fans run while an input is missing. Set FALLBACK_FANS_ON under
 # "Fallback values" at the top of this file, not here.
-FAN_FAILSAFE_DUTY_PCT: float = FALLBACK_FAN_DUTY_PCT
+FAN_FAILSAFE_ON: bool = FALLBACK_FANS_ON
 
-# How often the duty cycle is recalculated. The sensors read every 60 s, so this only
+# How often the difference is re-evaluated. The sensors read every 60 s, so this only
 # limits how soon a new reading takes effect. Fan control isn't published on its own:
 # the health report includes its state (fan_* keys).
 FAN_CONTROL_INTERVAL_S: float = 10.0
