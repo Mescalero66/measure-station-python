@@ -107,7 +107,7 @@ async def run(cfg: ModuleType) -> None:
     # outbox already recorded, so the board's repeated readings aren't recorded twice.
     mqboard = None
     if cfg.MQBOARD_ENABLED:
-        mqboard = _mqboard_decoder(cfg, await asyncio.to_thread(outbox.load_mqboard_last_seen))
+        mqboard = mqboard_decoder(cfg, await asyncio.to_thread(outbox.load_mqboard_last_seen))
     supervisor = build_supervisor(cfg, clock, queue, outbox, encoder, new_data, mqboard)
     notifier = SystemdNotifier()
 
@@ -269,7 +269,7 @@ def validate_config(cfg: Any) -> list[str]:
                     f"sensor {sensor.name!r} uses {used!r}, which isn't another enabled sensor"
                 )
     if cfg.MQBOARD_ENABLED:
-        sources.extend(_mqboard_decoder(cfg, {}).sources())
+        sources.extend(mqboard_decoder(cfg, {}).sources())
     if cfg.FAN_ENABLED:
         errors.extend(_fan_errors(cfg, sensors))
 
@@ -354,7 +354,8 @@ def _enabled(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in entries if e.get("enabled", True)]
 
 
-def _mqboard_decoder(cfg: Any, last_seen: dict[str, int]) -> MqBoardDecoder:
+def mqboard_decoder(cfg: Any, last_seen: dict[str, int]) -> MqBoardDecoder:
+    """The MQ board decoder; ``last_seen`` is each sensor's last recorded ``uptime_s``."""
     return MqBoardDecoder(
         last_seen=last_seen,
         source_prefix=cfg.MQBOARD_SOURCE_PREFIX,

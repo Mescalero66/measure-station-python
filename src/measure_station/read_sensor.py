@@ -1,4 +1,5 @@
 """Print one sensor's readings to the terminal, for checking its wiring on the Pi.
+See docs/testing-the-station.md.
 
     python -m measure_station.read_sensor               # list the sensors in sysconfig.py
     python -m measure_station.read_sensor air-quality   # read it every 10 s until Ctrl+C

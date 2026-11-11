@@ -65,6 +65,7 @@ stalls the rest of the station.
 │   ├── watchdog.py                 # systemd sd_notify / watchdog
 │   ├── health.py                   # periodic station self-report
 │   ├── read_sensor.py              # prints one sensor's readings, for checking wiring
+│   ├── live_test.py                # all sensors every 10 s, sent to a test broker, unstored
 │   ├── fan/                        # exhaust and intake fan control, sysfs PWM outputs
 │   ├── drivers/                    # hardware drivers, verbatim from drivers-repo
 │   ├── sensors/                    # sensor classes (adapters for drivers/) + registry
@@ -78,6 +79,9 @@ stalls the rest of the station.
 
 - [Deploying the Station](docs/deploying-the-station.md): step by step from an empty SD
   card to a checked, running station, for readers new to Linux.
+- [Testing the Station](docs/testing-the-station.md): checking on the Pi that every
+  sensor answers, that the fans start, and that the readings are plausible, one sensor at
+  a time or all at once, sent to a test PC.
 - [Operating](docs/operating.md): status, logs, applying configuration changes, updating.
 - [SD Card Wear](docs/sd-card-wear.md): what the station writes, and how to make the card
   last.

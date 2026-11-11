@@ -24,7 +24,8 @@ on a cable. It measures temperature to ±0.5 °C (from -10 to 85 °C), in steps 
   which adds `dtoverlay=w1-gpio` to config.txt, on GPIO4). Reboot after installing.
 - **Check it's connected:** `ls /sys/bus/w1/devices/` should list a `28-...` entry, and
   `cat /sys/bus/w1/devices/28-*/temperature` prints millidegrees. Then
-  `python -m measure_station.read_sensor temperature-probe` prints the station's reading.
+  `python -m measure_station.read_sensor temperature-probe` prints the station's reading
+  (see [Testing the Station](../testing-the-station.md#one-sensor-at-a-time)).
 
 **What Gets Published**
 

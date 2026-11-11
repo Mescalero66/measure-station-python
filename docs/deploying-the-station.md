@@ -426,93 +426,13 @@ systemctl status measure-station
 
 Look for **`Active: active (running)`** in green. Press **q** to quit.
 
-### 2. Can the Pi See Every Sensor?
+### 2. Do the Sensors and Fans Work?
 
-Stop the station first, so the checks below have the sensors to themselves:
+Work through [Testing the Station](testing-the-station.md). It checks that the Pi can see
+every sensor, that the fans start, and that each sensor's readings are plausible. It
+stops the station first, and starts it again at the end.
 
-```bash
-sudo systemctl stop measure-station
-```
-
-List the sensors on the I2C bus:
-
-```bash
-sudo i2cdetect -y 1
-```
-
-With everything wired, it shows these eight addresses in a grid:
-
-```text
-     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
-00:                         -- -- -- -- -- -- -- --
-10: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- 1f
-20: -- -- -- 23 -- -- -- -- -- -- -- -- -- -- -- --
-30: -- -- -- -- -- -- -- -- 38 -- -- -- -- -- -- --
-40: 40 -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
-50: -- -- -- 53 -- -- -- -- -- -- -- -- -- -- -- --
-60: -- -- 62 -- -- -- -- -- -- -- -- 6b -- -- -- --
-70: -- -- -- -- -- -- 76 --
-```
-
-A missing number means that sensor isn't answering: check its four wires against the
-table in [Step 3](#step-3-wire-the-sensors). If none appear at all, check the shared
-wires to pins 1, 3, 5 and 6.
-
-The DS18B20 probe on pin 7 isn't on the I2C bus. Check it separately:
-
-```bash
-ls /sys/bus/w1/devices/
-```
-
-It should list one `28-...` entry (its ID). If there's none, check the probe's three
-wires and the 4.7 kΩ resistor on pin 7.
-
-The PWM pins for the fans (pins 12 and 35) are ready if this lists `pwmchip0`:
-
-```bash
-ls /sys/class/pwm/
-```
-
-To test the fans by hand, see [Fan Control](fan-control.md#the-pwm-outputs). Switch each
-set on and off a few times: every fan should start from standstill every time. For
-`FAN_MODE = "analog"`, also check that the exhaust fans keep turning at
-`FAN_ANALOG_MIN_DUTY_PCT` (50 % by default) once started at 100 %; if not, raise it.
-
-### 3. Do the Sensors Give Sensible Readings?
-
-This tool reads one sensor every 10 seconds and prints the result. With no name, it lists
-the sensors:
-
-```bash
-/opt/measure-station/.venv/bin/python -m measure_station.read_sensor
-```
-
-Then read each one by name, for example:
-
-```bash
-/opt/measure-station/.venv/bin/python -m measure_station.read_sensor temperature
-```
-
-Whichever sensor it reads, it runs the fans too, so the sensor gets the airflow it will
-have in service: the exhaust fans at 100 %, and the intake fans at 100 % for 3 seconds
-(`FAN_KICKSTART_S`), then at 50 % (`FAN_ANALOG_MIN_DUTY_PCT`). If the fans can't be
-started (e.g. the PWM overlay isn't loaded), it says so and reads the sensor anyway.
-
-Press **Ctrl+C** to stop it. The fans are then left as the stopped station leaves them:
-exhaust at 100 %, intake off. Check that each sensor's values look plausible (the room
-temperature, a humidity between 20 and 90 %, and so on). Things that are normal:
-
-- `particulates` takes about 35 seconds to show its first reading.
-- `air-quality` shows `validity=warmup` for its first 3 minutes, and `startup` for the
-  first hour of a brand-new sensor.
-
-When you're done, start the station again:
-
-```bash
-sudo systemctl start measure-station
-```
-
-### 4. What Does the Log Say?
+### 3. What Does the Log Say?
 
 ```bash
 sudo journalctl -u measure-station -f
@@ -529,7 +449,7 @@ This shows the station's log and keeps adding new lines. Press **Ctrl+C** to sto
 | `Task 'sensor:...' crashed`, with an error | That sensor failed. The station keeps retrying it. Check its wiring |
 | `Configuration error: ...` | A setting is wrong. The station won't start until it's fixed. See [Troubleshooting](#troubleshooting) |
 
-### 5. Has the Clock Synchronised?
+### 4. Has the Clock Synchronised?
 
 ```bash
 timedatectl
@@ -538,7 +458,7 @@ timedatectl
 Look for **`System clock synchronized: yes`**. If it says `no` for more than a few
 minutes, check the time server address in Step 5.
 
-### 6. Are Readings Being Stored?
+### 5. Are Readings Being Stored?
 
 ```bash
 sudo sqlite3 /var/lib/measure-station/outbox.sqlite3 'select count(*) from outbox'
@@ -625,7 +545,7 @@ Connect with `ssh` first, as in Step 2.
 | Watch the log | `sudo journalctl -u measure-station -f` (**Ctrl+C** to stop) |
 | The log since this morning | `sudo journalctl -u measure-station --since today` |
 | Apply a changed setting | `sudo systemctl restart measure-station` |
-| Stop it (e.g. to test a sensor) | `sudo systemctl stop measure-station` |
+| Stop it (e.g. to [test it](testing-the-station.md)) | `sudo systemctl stop measure-station` |
 | Start it again | `sudo systemctl start measure-station` |
 | Readings waiting to be sent | `sudo sqlite3 /var/lib/measure-station/outbox.sqlite3 'select count(*) from outbox'` |
 | Free space on the SD card | `df -h /` (look at `Avail`) |
@@ -660,8 +580,6 @@ new code so the station starts quickly.
 | `ssh` warns `REMOTE HOST IDENTIFICATION HAS CHANGED` | Normal after re-writing the SD card. Clear the old entry, then connect again: `ssh-keygen -R station1.local` |
 | The installer stopped with an error | Copy the last 20 lines it printed and send them to the developer. It's safe to run it again once the problem is fixed |
 | `Active: failed` in `systemctl status` | Look at the log: `sudo journalctl -u measure-station -n 50`. A `Configuration error` names the setting to fix |
-| A sensor is missing from `i2cdetect` | Shut down, unplug, and check that sensor's four wires. A loose jumper wire is the usual cause |
-| `i2cdetect` shows nothing at all, or errors | Check the shared wires to pins 1, 3, 5 and 6. If it says the bus doesn't exist, run the installer again and reboot |
 | A sensor keeps logging `crashed` | Check its wiring. If it isn't fitted, set its `"enabled"` to `False` (Step 5) |
 | The humidity sensor logs a version error | The probe has the newer CHT832X chip (green SCL wire), which needs a different driver. Tell the developer |
 | `sudo git pull` says `Your local changes would be overwritten` | Your edits to `sysconfig.py` clash with the update. Run `sudo git stash`, then `sudo git pull`, then `sudo git stash pop`. If that last command reports a conflict, ask the developer |

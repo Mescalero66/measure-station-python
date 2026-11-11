@@ -121,7 +121,7 @@ missing, the exhaust fans run at 100 %.
   in binary mode too, where it changes nothing.
 - **`FAN_ANALOG_MIN_DUTY_PCT` must keep the exhaust fans turning once started.** Above
   that, it's a choice between airflow and noise (and dust drawn in). Test it by hand
-  (see below).
+  (see [Testing the Station](testing-the-station.md#do-the-fans-work)).
 - **`FAN_PWM_FREQUENCY_HZ`** (100 Hz) matters only in analog mode; at 0 % and 100 % the
   output is steady. Switching a 2-wire fan's whole supply works best at a low frequency,
   which its motor electronics can follow. If the fans hum, tick or run unevenly, try 25
@@ -179,27 +179,9 @@ The station uses the Pi's hardware PWM through the kernel's sysfs interface
 - **Permissions:** Raspberry Pi OS gives the `gpio` group access to `/sys/class/pwm`, and
   the installer puts the service user in that group.
 
-**Check it works,** with the service stopped (`sudo systemctl stop measure-station`).
-Channel 0 is the exhaust fans; for the intake fans, use `1` and `pwm1` instead:
-
-```bash
-ls /sys/class/pwm/                                     # pwmchip0: the overlay is loaded
-cd /sys/class/pwm/pwmchip0
-echo 0 | sudo tee export                               # creates pwm0 (skip if it's there)
-echo 10000000 | sudo tee pwm0/period                   # 100 Hz, in nanoseconds
-echo 10000000 | sudo tee pwm0/duty_cycle               # 100 %: fans on
-echo 1 | sudo tee pwm0/enable
-echo 5000000 | sudo tee pwm0/duty_cycle                # 50 %: do they keep turning?
-echo 0 | sudo tee pwm0/duty_cycle                      # 0 %: fans off
-```
-
-Starting the service again takes over the same channels.
-
-`read_sensor` (see
-[Deploying the Station](deploying-the-station.md#3-do-the-sensors-give-sensible-readings))
-also drives the fans while it runs: the exhaust fans at 100 %, and the intake fans
-kick-started at 100 %, then at `FAN_ANALOG_MIN_DUTY_PCT`, whatever `FAN_MODE` is. So it
-also shows whether the intake fans keep turning at that speed.
+**To check the outputs and the fans by hand,** see
+[Testing the Station](testing-the-station.md#do-the-fans-work). Its `read_sensor` and
+`live_test` tools run the fans too.
 
 ## Turning It Off
 
