@@ -17,6 +17,7 @@ Contents:
 - [Do the Fans Work?](#do-the-fans-work)
 - [One Sensor at a Time](#one-sensor-at-a-time)
 - [All Sensors at Once, Sent to a Test PC](#all-sensors-at-once-sent-to-a-test-pc)
+- [Matching the Probe to the Humidity Sensor](#matching-the-probe-to-the-humidity-sensor)
 - [When You're Done](#when-youre-done)
 
 ## Before You Start
@@ -177,6 +178,34 @@ Differences from the running station:
   "estimated"` and aren't corrected later.
 
 Press **Ctrl+C** to stop it. The fans are left as the stopped station leaves them.
+
+## Matching the Probe to the Humidity Sensor
+
+Fan control compares two sensors: the DS18B20 probe at the top of the enclosure minus the
+CHT8305 (`humidity`) at the bottom. Each is accurate only to within a few tenths of a
+degree (±0.5 °C and ±0.3 °C typical), so even in the same air they can disagree by up to
+about 0.8 °C. The probe's offset, `PROBE_TEMPERATURE_OFFSET_C`, removes that
+disagreement, so the
+difference fan control sees is the real one. It matches the probe to the CHT8305; it
+doesn't make either one more accurate.
+
+1. **Put the two side by side,** with `PROBE_TEMPERATURE_OFFSET_C` at `0.0`: tape
+   the DS18B20 probe to the CHT8305 probe, in the same air, out of the fans' airflow, and
+   away from anything warm (the Pi, the power supply, the MQ board).
+2. **Run [`live_test`](#all-sensors-at-once-sent-to-a-test-pc),** and wait 15 to 30
+   minutes for both to settle.
+3. **Compare** `temperature_c` of `temperature-probe` with `temperature_c` of `humidity`
+   over about ten readings. The offset is the probe's average minus the CHT8305's. For
+   example, if the probe reads 21.4 °C and the CHT8305 22.0 °C, the offset is `-0.6`
+   (the probe reads 0.6 °C low).
+4. **Set it** as `PROBE_TEMPERATURE_OFFSET_C`, in the **Calibration** section near the
+   top of `sysconfig.py` (for example `PROBE_TEMPERATURE_OFFSET_C: float = -0.6`). Put
+   the probe back at the top of the enclosure, and restart the station.
+
+The offset is subtracted from every reading, the same way as the
+[CO2 sensor's](sensors/co2-sensor.md). If the two disagree by different amounts at
+different times (for example, only while the fans are off), it isn't a calibration error:
+look at where the sensors are placed instead.
 
 ## When You're Done
 

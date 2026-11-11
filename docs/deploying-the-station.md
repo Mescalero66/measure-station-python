@@ -399,7 +399,10 @@ Keep the capital letters, quotes and commas exactly as they are. Save and exit a
 
 **Later, once the station is mounted in its final place:** the CO2 sensor's
 `temperature_offset_c` (4.0 by default) may need adjusting. See the
-[CO2 Sensor](sensors/co2-sensor.md) page.
+[CO2 Sensor](sensors/co2-sensor.md) page. So may `PROBE_TEMPERATURE_OFFSET_C`, in the
+**Calibration** section near the top of the file, if the DS18B20 probe disagrees with
+the humidity sensor: see
+[Matching the Probe to the Humidity Sensor](testing-the-station.md#matching-the-probe-to-the-humidity-sensor).
 
 ### Restart to Apply Everything
 

@@ -55,6 +55,20 @@ def test_missing_probe_fails_to_open(tmp_path: Path) -> None:
         _sensor(tmp_path, device_id="28-x").open()
 
 
+@pytest.mark.parametrize(("offset", "expected"), [(0.6, 22.525), (-0.6, 23.725), (0, 23.125)])
+def test_temperature_offset_is_subtracted(tmp_path: Path, offset: float, expected: float) -> None:
+    _device(tmp_path, "28-a", GOOD)  # 23.125 °C
+    sensor = _sensor(tmp_path, temperature_offset_c=offset)
+    sensor.open()
+    assert sensor.read().values == {"temperature_c": expected}  # exact: no float noise
+
+
+@pytest.mark.parametrize("offset", [-10.5, 10.5])
+def test_temperature_offset_out_of_range(tmp_path: Path, offset: float) -> None:
+    with pytest.raises(ValueError, match="temperature_offset_c"):
+        _sensor(tmp_path, temperature_offset_c=offset)
+
+
 def test_device_id_must_be_a_ds18b20() -> None:
     with pytest.raises(ValueError, match="28-"):
         create_sensor({"type": "ds18b20", "name": "p", "interval_s": 60, "device_id": "10-a"})

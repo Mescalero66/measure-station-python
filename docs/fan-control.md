@@ -38,6 +38,12 @@ electronics are warming the enclosure. Ventilation can only reduce the rise abov
 drawn in; it can't cool the enclosure below outside air temperature. So the difference,
 not any absolute temperature, decides when more air is needed.
 
+The two sensors can disagree by up to about 0.8 °C in the same air, within their
+accuracy, so the difference can read slightly negative when the box isn't warm. To
+remove that, set `PROBE_TEMPERATURE_OFFSET_C` in the Calibration section of
+`sysconfig.py` (see
+[Matching the Probe to the Humidity Sensor](testing-the-station.md#matching-the-probe-to-the-humidity-sensor)).
+
 | Setting | Default | Meaning |
 |---|---|---|
 | `FAN_TEMPERATURE_DIFFERENCE_ON_C` | 8.0 | Heat mode starts at this difference |

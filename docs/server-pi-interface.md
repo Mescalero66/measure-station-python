@@ -372,7 +372,7 @@ About 170 bytes.
 | `values` | `aqi` | integer | | | Air quality index, UBA scale: 1 excellent, 2 good, 3 moderate, 4 poor, 5 unhealthy |
 | `values` | `tvoc_ppb` | integer | ppb | 0 | Total volatile organic compounds, 0 to 65,000 |
 | `values` | `eco2_ppm` | integer | ppm | 0 | Equivalent CO2, 400 to 65,000: estimated from VOCs, not measured |
-| `meta` | `validity` | text | | | `"normal"`; `"warmup"` (first 3 minutes after each start); `"startup"` (first hour of a new sensor); `"invalid"`. **Trust `values` only when `"normal"`** |
+| `meta` | `validity` | text | | | `"normal"`; `"warmup"` (first 3 minutes after each start); `"startup"` (first hour of a new sensor, and possibly for an hour after the station resets a stuck ENS160); `"invalid"`. **Trust `values` only when `"normal"`** |
 | `meta` | `temperature_c` | number | °C | 2 | Temperature on the board: a compensation input, not room temperature |
 | `meta` | `humidity_pct` | number | % | 1 | Humidity on the board: a compensation input, not room humidity |
 

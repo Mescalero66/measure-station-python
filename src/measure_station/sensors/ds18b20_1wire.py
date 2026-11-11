@@ -4,8 +4,9 @@ Reads the kernel's sysfs file for the probe, so it needs no Python library. See
 docs/sensors/onewire-temperature-sensor.md for wiring and settings.
 
 Values:
-    temperature_c:  temperature at the probe, -55 to 125 °C, in steps of 0.0625 °C.
-                    ±0.5 °C from -10 to 85 °C.
+    temperature_c:  temperature at the probe, -55 to 125 °C, in steps of 0.0625 °C,
+                    after its temperature offset (temperature_offset_c). ±0.5 °C from
+                    -10 to 85 °C.
 
 Each read starts a conversion and waits for it (about 0.75 s at 12-bit resolution).
 """
@@ -26,6 +27,9 @@ _ATTEMPTS = 3
 # The value the chip holds after power-on, before its first conversion. A reading of
 # exactly 85 °C usually means the probe browned out and reset.
 _POWER_ON_MILLI_C = 85_000
+# temperature_offset_c's limits: well beyond the ±0.5 °C accuracy, so a larger value is
+# most likely a typo (e.g. 6 for 0.6).
+_MAX_OFFSET_C = 10.0
 
 
 class Ds18b20Sensor(Sensor):
@@ -34,12 +38,19 @@ class Ds18b20Sensor(Sensor):
         name: str,
         interval_s: float,
         device_id: str | None = None,
+        temperature_offset_c: float = 0.0,
         devices_dir: str = str(_DEVICES),
     ) -> None:
         super().__init__(name, interval_s)
         if device_id is not None and not device_id.startswith(_FAMILY):
             raise ValueError(f"device_id must start with {_FAMILY!r} (e.g. '28-0000075a1b2c')")
+        if not -_MAX_OFFSET_C <= temperature_offset_c <= _MAX_OFFSET_C:
+            raise ValueError(
+                f"temperature_offset_c must be -{_MAX_OFFSET_C:g} to {_MAX_OFFSET_C:g}"
+            )
         self._device_id = device_id
+        # Subtracted, like the SCD41's: how much the probe reads too high (negative if low).
+        self._offset_c = temperature_offset_c
         self._devices_dir = Path(devices_dir)
         self._file: Path | None = None
 
@@ -66,7 +77,9 @@ class Ds18b20Sensor(Sensor):
         for _ in range(_ATTEMPTS):
             milli_c, problem = _parse(self._file.read_text())
             if milli_c is not None:
-                return Sample({"temperature_c": milli_c / 1000})
+                # 4 places hold the 0.0625 °C steps exactly; they also drop the float noise
+                # an offset like 0.6 would add.
+                return Sample({"temperature_c": round(milli_c / 1000 - self._offset_c, 4)})
         raise OSError(f"DS18B20 {self._file.parent.name}: {problem}")
 
     def close(self) -> None:

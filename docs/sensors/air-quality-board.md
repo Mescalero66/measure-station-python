@@ -74,7 +74,7 @@ One reading every `interval_s` (60 s by default), on
   |---|---|
   | `"normal"` | Normal operation |
   | `"warmup"` | The first 3 minutes after every start of the ENS160: every service start, Pi reboot and recovery from an error (see below) |
-  | `"startup"` | Initial start-up: the first hour of operation of a brand-new sensor |
+  | `"startup"` | Initial start-up: the first hour of operation of a brand-new sensor, and possibly the first hour after the station resets a stuck ENS160 (see below) |
   | `"invalid"` | The ENS160 reports its output as invalid |
 
 - **`eco2_ppm` is not a CO2 measurement.** The ENS160 estimates it from VOCs, so it
@@ -89,11 +89,22 @@ One reading every `interval_s` (60 s by default), on
 - **Each reading:** the AHT21 measures, and its values are written to the ENS160 as
   compensation. Then AQI, TVOC and eCO2 are read together, so all three come from the
   same sample.
+- **Starting.** After starting the ENS160's STANDARD (sensing) mode, the station waits
+  for its first sample, about 2 seconds, so the first reading is never the empty data
+  registers (all 0).
 - **Self-check.** Before each reading, the station checks that the ENS160 is still in
-  STANDARD (sensing) mode and isn't reporting an error. A brown-out, for example, resets
-  it to deep sleep, where its data stops updating. If the check fails, the reading fails
-  instead of publishing stale values. The station then closes and re-opens the sensor,
-  which restarts it.
+  STANDARD mode, is measuring, and isn't reporting an error. A brown-out, for example,
+  resets it to deep sleep, where its data stops updating. If the check fails, the
+  reading fails instead of publishing stale values. An AQI of 0 (no result: the scale is
+  1 to 5) fails the reading too. The station then closes and re-opens the sensor, which
+  restarts it.
+- **A stuck ENS160.** It can stop measuring while still reporting STANDARD mode: all
+  three values then read 0, with `validity` `"normal"` (its status register reads 0x03).
+  Writing STANDARD mode again doesn't restart it, and neither did removing its power
+  while the I2C wires stayed connected (they can keep a chip powered). So if it isn't
+  measuring within 3 seconds of being started, the station resets it, logs
+  `the ENS160 isn't measuring; resetting it`, and starts it again. After a reset it may
+  report `validity: "startup"` for an hour.
 - **Faults.** If the board doesn't answer (unplugged, loose wire), the log shows
   `Task 'sensor:air-quality' crashed` with the reason, and the station retries with
   backoff, from 1 s up to 60 s. No readings are published while it's down, so the data

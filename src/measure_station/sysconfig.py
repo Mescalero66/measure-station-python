@@ -57,6 +57,19 @@ FALLBACK_ALTITUDE_M: float = 75
 # (docs/fan-control.md).
 
 # --------------------------------------------------------------------------- #
+# Calibration
+# --------------------------------------------------------------------------- #
+# Corrections set by hand for this station, once its sensors are mounted. The
+# settings further down refer to these.
+#
+# Subtracted from every reading of the DS18B20 probe (temperature-probe), in °C (-10 to
+# 10), like the CO2 sensor's temperature_offset_c: how much it reads too high, or
+# negative if it reads too low. Fan control uses the corrected reading. Find it by
+# comparing the probe with the "humidity" sensor side by side
+# (docs/testing-the-station.md#matching-the-probe-to-the-humidity-sensor).
+PROBE_TEMPERATURE_OFFSET_C: float = 0.0
+
+# --------------------------------------------------------------------------- #
 # Logging
 # --------------------------------------------------------------------------- #
 LOG_LEVEL: str = "INFO"
@@ -297,6 +310,8 @@ SENSORS: list[dict[str, Any]] = [
         # Its 1-wire ID (e.g. "28-0000075a1b2c", see /sys/bus/w1/devices/), or None
         # to use the only DS18B20 on the bus.
         "device_id": None,
+        # Subtracted from every reading, in °C. Set PROBE_TEMPERATURE_OFFSET_C above.
+        "temperature_offset_c": PROBE_TEMPERATURE_OFFSET_C,
         "enabled": True,
     },
     {

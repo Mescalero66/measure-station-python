@@ -25,13 +25,21 @@ Requires: pip install -e ".[ens160_aht21]"   (smbus2)
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from measure_station.sensors.base import Sample, Sensor
 
+log = logging.getLogger(__name__)
+
 _ENS160_ADDRESSES = (0x52, 0x53)  # set by the board's ADD pin (ENS §14.1.1)
 # The ENS160's validity codes 0-3 (ENS §11, Table 10), published as text.
 VALIDITY = ("normal", "warmup", "startup", "invalid")
+# Longest wait for the first sample after starting STANDARD mode; on hardware it came
+# about 2 s after. Twice this, plus a reset, stays within SENSOR_READ_TIMEOUT_S (10 s).
+_FIRST_SAMPLE_S = 3.0
+_POLL_S = 0.1
 
 
 class Ens160Aht21Sensor(Sensor):
@@ -58,6 +66,33 @@ class Ens160Aht21Sensor(Sensor):
         self._board = ENS160_AHT21(self._i2c, self._ens160_address)
         # Starts STANDARD mode, which restarts the ENS160's 3 minute warm-up (validity 1).
         self._board.begin()
+        ens160 = self._board.ens160
+        # Wait for its first sample, so the first read can't return the empty (all 0)
+        # data registers.
+        if self._first_sample(ens160):
+            return
+        # Seen on hardware: OPMODE still read STANDARD, but it had stopped measuring
+        # (DEVICE_STATUS 0x03, data all 0), and stayed so when its power was removed with
+        # the I2C lines still connected (which may have kept it powered). A software
+        # reset restarted it. Reset only when needed: it came back with validity 2, so a
+        # reset may restart its 1 hour start-up phase.
+        log.warning("%s: the ENS160 isn't measuring; resetting it", self.name)
+        ens160.reset()
+        ens160.set_mode(ens160.MODE_STANDARD)
+        if not self._first_sample(ens160):
+            raise OSError("ENS160 isn't measuring, even after a reset")
+
+    @staticmethod
+    def _first_sample(ens160: Any) -> bool:
+        """Whether it's measuring, with a sample ready, within _FIRST_SAMPLE_S."""
+        deadline = time.monotonic() + _FIRST_SAMPLE_S
+        while True:
+            status = ens160.status()  # reading it doesn't clear NEWDAT (only a data read does)
+            if status.running and status.new_data:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_POLL_S)
 
     def read(self) -> Sample:
         ens160 = self._board.ens160
@@ -66,10 +101,17 @@ class Ens160Aht21Sensor(Sensor):
         mode = ens160.mode()
         if mode != ens160.MODE_STANDARD:
             raise OSError(f"ENS160 is not in STANDARD mode (OPMODE 0x{mode:02X})")
-        if ens160.status().error:
+        status = ens160.status()
+        if status.error:
             raise OSError("ENS160 reports an error (DEVICE_STATUS STATER)")
+        # It can also stop measuring while OPMODE still reads STANDARD. Its data is then
+        # all 0, and validity 0 ("normal"), so this bit is the only sign.
+        if not status.running:
+            raise OSError("ENS160 has stopped measuring (DEVICE_STATUS STATAS low)")
 
         reading = self._board.read()
+        if reading.aqi == 0:  # the UBA index is 1-5: 0 means no result
+            raise OSError("ENS160 returned AQI 0 (no result)")
         return Sample(
             values={"aqi": reading.aqi, "tvoc_ppb": reading.tvoc, "eco2_ppm": reading.eco2},
             meta={

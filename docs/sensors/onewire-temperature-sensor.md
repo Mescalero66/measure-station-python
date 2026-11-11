@@ -57,6 +57,7 @@ The `SENSORS` entry in `sysconfig.py`:
 | `interval_s` | `60` | Seconds between readings |
 | `publish` | `False` | Whether its readings are also sent to MQTT |
 | `device_id` | `None` | The probe's 1-wire ID, e.g. `"28-0000075a1b2c"` (see `/sys/bus/w1/devices/`). `None` uses the only DS18B20 on the bus, and fails if there's more than one |
+| `temperature_offset_c` | `PROBE_TEMPERATURE_OFFSET_C` (0.0) | Subtracted from every reading, in °C (-10 to 10): how much the probe reads too high, or negative if it reads too low. The same sign as the [CO2 sensor's](co2-sensor.md). Set it with `PROBE_TEMPERATURE_OFFSET_C` in the Calibration section at the top of `sysconfig.py`, not here. See [Matching the Probe to the Humidity Sensor](../testing-the-station.md#matching-the-probe-to-the-humidity-sensor) |
 
 To add a second probe, add a second entry with its own `name` and `device_id`. It needs
 no Python dependencies, so there's no install extra.
