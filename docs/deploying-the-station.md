@@ -480,7 +480,7 @@ set on and off a few times: every fan should start from standstill every time. F
 
 ### 3. Do the Sensors Give Sensible Readings?
 
-This tool reads one sensor every 2 seconds and prints the result. With no name, it lists
+This tool reads one sensor every 10 seconds and prints the result. With no name, it lists
 the sensors:
 
 ```bash
@@ -493,7 +493,13 @@ Then read each one by name, for example:
 /opt/measure-station/.venv/bin/python -m measure_station.read_sensor temperature
 ```
 
-Press **Ctrl+C** to stop it. Check that each sensor's values look plausible (the room
+Whichever sensor it reads, it runs the fans too, so the sensor gets the airflow it will
+have in service: the exhaust fans at 100 %, and the intake fans at 100 % for 3 seconds
+(`FAN_KICKSTART_S`), then at 50 % (`FAN_ANALOG_MIN_DUTY_PCT`). If the fans can't be
+started (e.g. the PWM overlay isn't loaded), it says so and reads the sensor anyway.
+
+Press **Ctrl+C** to stop it. The fans are then left as the stopped station leaves them:
+exhaust at 100 %, intake off. Check that each sensor's values look plausible (the room
 temperature, a humidity between 20 and 90 %, and so on). Things that are normal:
 
 - `particulates` takes about 35 seconds to show its first reading.

@@ -195,6 +195,12 @@ echo 0 | sudo tee pwm0/duty_cycle                      # 0 %: fans off
 
 Starting the service again takes over the same channels.
 
+`read_sensor` (see
+[Deploying the Station](deploying-the-station.md#3-do-the-sensors-give-sensible-readings))
+also drives the fans while it runs: the exhaust fans at 100 %, and the intake fans
+kick-started at 100 %, then at `FAN_ANALOG_MIN_DUTY_PCT`, whatever `FAN_MODE` is. So it
+also shows whether the intake fans keep turning at that speed.
+
 ## Turning It Off
 
 Set `FAN_ENABLED = False` and restart the service. The PWM outputs then stay wherever

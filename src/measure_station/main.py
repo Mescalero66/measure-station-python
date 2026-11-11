@@ -193,15 +193,7 @@ def build_supervisor(
     if cfg.FAN_ENABLED:
         settings = fan_settings(cfg)
         fan_state = FanState()
-        exhaust, intake = (
-            SysfsPwm(
-                chip=cfg.FAN_PWM_CHIP,
-                channel=channel,
-                frequency_hz=cfg.FAN_PWM_FREQUENCY_HZ,
-                inverted=cfg.FAN_PWM_INVERTED,
-            )
-            for channel in (cfg.FAN_EXHAUST_PWM_CHANNEL, cfg.FAN_INTAKE_PWM_CHANNEL)
-        )
+        exhaust, intake = fan_outputs(cfg)
         supervisor.add(
             "fan",
             functools.partial(control_fan, exhaust, intake, latest, fan_state, settings=settings),
@@ -325,6 +317,20 @@ def fan_settings(cfg: Any) -> FanSettings:
         min_duty_pct=cfg.FAN_ANALOG_MIN_DUTY_PCT,
         kickstart_s=cfg.FAN_KICKSTART_S,
     )
+
+
+def fan_outputs(cfg: Any) -> tuple[SysfsPwm, SysfsPwm]:
+    """The (exhaust, intake) PWM outputs, not yet opened."""
+    exhaust, intake = (
+        SysfsPwm(
+            chip=cfg.FAN_PWM_CHIP,
+            channel=channel,
+            frequency_hz=cfg.FAN_PWM_FREQUENCY_HZ,
+            inverted=cfg.FAN_PWM_INVERTED,
+        )
+        for channel in (cfg.FAN_EXHAUST_PWM_CHANNEL, cfg.FAN_INTAKE_PWM_CHANNEL)
+    )
+    return exhaust, intake
 
 
 def _fan_errors(cfg: Any, sensors: list[Sensor]) -> list[str]:

@@ -364,7 +364,8 @@ FAN_PWM_INVERTED: bool = False
 #             reading is missing.
 FAN_MODE: str = "binary"
 # Analog only: the lowest speed, 0-100 %: the exhaust fans' speed in normal running. It
-# must keep them turning once started (see the kick-start below).
+# must keep them turning once started (see the kick-start below). In both modes, also
+# the intake fans' speed while read_sensor runs.
 FAN_ANALOG_MIN_DUTY_PCT: float = 50.0
 # A fan set that turns on runs at 100 % for this long first, then at its speed, so a
 # low speed can't leave it stalled from standstill. 0 = no kick-start.
