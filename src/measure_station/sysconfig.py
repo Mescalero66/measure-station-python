@@ -384,7 +384,7 @@ FAN_TEMPERATURE_DIFFERENCE_OFF_C: float = 3.0
 # Once on, the intake fans stay on at least this long, so they don't switch with each
 # 1-minute reading. 5 minutes lets the parts that hold the heat (power supply, Pi,
 # regulators) cool too, not only the air, so the difference doesn't spring straight back.
-FAN_INTAKE_MIN_ON_S: float = 300.0
+FAN_INTAKE_MIN_ON_S: float = 120.0
 
 # Fog: FAN_HUMIDITY_SOURCE's "humidity_pct" (the CHT8305, in the air drawn in at the
 # bottom). Fog mode turns both fan sets off when it reaches ON, and ends when it reaches
