@@ -125,3 +125,37 @@ stalls the rest of the station.
 **Development**
 
 - [Development](docs/development.md): running tests and the station on a dev machine.
+
+## To Do
+
+**Power the air quality board from 5 V permanently.** Its ENS160 kept stopping on 3.3 V
+(after hours, then after 30 seconds), but ran steadily on 5 V. Its 5 V wiring is
+temporary at the moment.
+
+- [ ] With the board on 5 V and its SDA and SCL disconnected from the Pi, check that both
+  read about 3.3 V or less to GND. If either reads about 5 V, its pull-ups go to VIN,
+  so 5 V would reach the Pi's GPIO pins: don't connect it that way.
+- [ ] Wire the board's VIN (VCC) to 5 V permanently, and leave its 3V3 pin unconnected,
+  so its own regulator and the 3.3 V rail aren't joined.
+- [ ] Update the schematic in `cad/`, and the wiring in
+  [Air Quality Board](docs/sensors/air-quality-board.md) and
+  [Deploying the Station](docs/deploying-the-station.md#step-3-wire-the-sensors).
+
+**Make the 3.3 V sensor supply steadier.** One LD1117V33 powers every sensor except the
+MQ board: about 130 mA on average, and up to about 500 mA if the brief peaks coincide,
+well within its 800 mA. The risk is short dips, not overload. The SEN62/SEN65 needs at
+least 3.15 V including ripple (datasheet Table 12), and draws 130 to 200 mA pulses; the
+SCD41 draws 175 mA pulses.
+
+- [ ] Power the particulate sensor (SEN62/SEN65) from its own LD1117V33, and the other
+  sensors from the existing one.
+- [ ] Fit each LD1117V33 with the output capacitor its datasheet specifies (typically at
+  least 10 µF; some versions need tantalum or electrolytic rather than ceramic).
+- [ ] Add 10–47 µF plus 100 nF across VDD and GND, right at the particulate sensor and
+  the CO2 sensor (SCD41).
+- [ ] Give the particulate and CO2 sensors their own short, thick power and ground wires
+  from the regulator, not daisy-chained jumpers or breadboard contacts.
+- [ ] Measure the particulate sensor's VDD with everything running: at least 3.2 V. (A
+  multimeter averages out 2 ms dips, so a reading near 3.15 V means it's dipping below.)
+- [ ] Keep the particulate sensor at 3.3 V (its maximum is 3.6 V), and the CO2 sensor
+  too, unless its board has its own I2C level shifting.
