@@ -123,6 +123,17 @@ def test_latest_values_expire() -> None:
     latest = LatestValues()
     latest.record("barometer", {"pressure_hpa": 1006.5}, valid_for_s=-1)
     assert latest.get("barometer", "pressure_hpa") is None
+    assert latest.reading_number("barometer") is None
+
+
+def test_each_reading_has_its_own_number() -> None:
+    latest = LatestValues()
+    assert latest.reading_number("humidity") is None
+    latest.record("humidity", {"humidity_pct": 95.0}, valid_for_s=60)
+    first = latest.reading_number("humidity")
+    assert latest.reading_number("humidity") == first  # the same reading, read again
+    latest.record("humidity", {"humidity_pct": 95.0}, valid_for_s=60)  # same value
+    assert latest.reading_number("humidity") not in (None, first)
 
 
 def test_unpublished_sensor_only_records_latest_values() -> None:

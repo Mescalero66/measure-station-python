@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -39,17 +40,30 @@ class LatestValues:
     """
 
     def __init__(self) -> None:
-        self._latest: dict[str, tuple[float, Mapping[str, Any]]] = {}
+        # source -> (valid until, values, reading number)
+        self._latest: dict[str, tuple[float, Mapping[str, Any], int]] = {}
+        self._readings = itertools.count(1)
 
     def record(self, source: str, values: Mapping[str, Any], *, valid_for_s: float) -> None:
-        self._latest[source] = (time.monotonic() + valid_for_s, values)
+        self._latest[source] = (time.monotonic() + valid_for_s, values, next(self._readings))
 
     def get(self, source: str, key: str) -> Any:
         """``source``'s latest value for ``key``, or None if missing or out of date."""
+        entry = self._current(source)
+        return None if entry is None else entry[1].get(key)
+
+    def reading_number(self, source: str) -> int | None:
+        """A number that's different for each reading of ``source``, so a reader polling
+        faster than the sensor can tell a new reading from the same one again. None if
+        missing or out of date."""
+        entry = self._current(source)
+        return None if entry is None else entry[2]
+
+    def _current(self, source: str) -> tuple[float, Mapping[str, Any], int] | None:
         entry = self._latest.get(source)
         if entry is None or time.monotonic() > entry[0]:
             return None
-        return entry[1].get(key)
+        return entry
 
 
 class Sensor(ABC):

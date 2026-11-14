@@ -174,7 +174,7 @@ def test_fan_control_runs_and_is_left_in_failsafe(
     monkeypatch.setattr(sysconfig, "FAN_ENABLED", True)
     asyncio.run(_run_for(0.5))
     [health] = [payload["values"] for _, payload, _ in sent if payload["source"] == "health"]
-    assert "fan_failsafe" in health  # the health report shares fan control's state
+    assert "fan_status" in health  # the health report shares fan control's state
     # Its inputs (the DS18B20 and CHT8305) aren't enabled here, so it runs on failsafe.
     assert log[:2] == [("exhaust", 100), ("intake", 0)]
     assert log[-2:] == [("exhaust", 100), ("intake", 0)]  # on stop, as the service leaves them

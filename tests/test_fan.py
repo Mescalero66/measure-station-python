@@ -86,6 +86,7 @@ def test_temperature_sources_must_differ() -> None:
         {"interval_s": 0},
         {"intake_min_on_s": -1},
         {"fog_min_s": -1},
+        {"fog_on_readings": 0},
         {"kickstart_s": -1},
         {"min_duty_pct": 101},
     ],
@@ -154,14 +155,21 @@ def _readings(probe_c: float | None, air_c: float, humidity_pct: float, valid_fo
     return step
 
 
-def _report(failsafe, exhaust_pct, intake_pct, difference_c, fog) -> dict:
+def _report(status, exhaust_pct, intake_pct, difference_c) -> dict:
     return {
-        "fan_failsafe": failsafe,
+        "fan_status": status,
         "fan_exhaust_duty_pct": exhaust_pct,
         "fan_intake_duty_pct": intake_pct,
         "fan_temp_diff_c": difference_c,
-        "fan_fog": fog,
     }
+
+
+def test_status_before_and_after_fan_control_runs() -> None:
+    state = FanState()
+    assert state.health_values() == _report("starting", None, None, None)
+    state.status, state.exhaust_duty_pct = "normal", 100
+    state.clear()
+    assert state.health_values() == _report("error", None, None, None)
 
 
 def test_normally_the_exhaust_fans_draw_air_through() -> None:
@@ -173,11 +181,11 @@ def test_normally_the_exhaust_fans_draw_air_through() -> None:
     assert intake.duties == [0, 0]
     assert exhaust.closed and intake.closed
     assert reports == [
-        _report(True, 100, 0, None, None),
-        _report(False, 100, 0, 1, False),
+        _report("failsafe", 100, 0, None),
+        _report("normal", 100, 0, 1),
     ]
     # Unknown once fan control has stopped.
-    assert stopped == _report(None, None, None, None, None)
+    assert stopped == _report("error", None, None, None)
 
 
 def test_heat_turns_the_intake_fans_on_too() -> None:
@@ -197,19 +205,21 @@ def test_heat_turns_the_intake_fans_on_too() -> None:
     assert exhaust.duties == [100, 100]  # on throughout
     assert intake.duties == [0, 100, 0, 0]
     assert reports[1:] == [
-        _report(False, 100, 100, 10, False),
-        _report(False, 100, 100, 5, False),
-        _report(False, 100, 0, 2, False),
+        _report("heat", 100, 100, 10),
+        _report("heat", 100, 100, 5),
+        _report("normal", 100, 0, 2),
     ]
 
 
-def test_fog_turns_both_fan_sets_off() -> None:
+def test_fog_slows_the_exhaust_fans() -> None:
     exhaust, intake = FakePwm(), FakePwm()
     reports, _ = asyncio.run(
         _run(
             exhaust,
             intake,
-            _settings(),
+            # Binary, so the minimum is only fog's speed. The kick at the start is over
+            # by the first readings.
+            _settings(min_duty_pct=40, kickstart_s=0.02),
             [
                 _readings(21, 20, 96),  # fog
                 _readings(21, 20, 92),  # between off and on: still fog
@@ -217,25 +227,37 @@ def test_fog_turns_both_fan_sets_off() -> None:
             ],
         )
     )
-    assert exhaust.duties == [100, 0, 100, 100]
+    # Still turning in fog, so no kick-start either way.
+    assert exhaust.duties == [100, 40, 100, 100]
     assert intake.duties == [0, 0]
     assert reports[1:] == [
-        _report(False, 0, 0, 1, True),
-        _report(False, 0, 0, 1, True),
-        _report(False, 100, 0, 1, False),
+        _report("fog", 40, 0, 1),
+        _report("fog", 40, 0, 1),
+        _report("normal", 100, 0, 1),
     ]
+
+
+def test_fog_needs_humid_readings_in_a_row() -> None:
+    exhaust, intake = FakePwm(), FakePwm()
+    foggy, dry = _readings(21, 20, 96), _readings(21, 20, 50)
+    settings = _settings(fog_on_readings=2, min_duty_pct=40)
+    reports, _ = asyncio.run(_run(exhaust, intake, settings, [foggy, dry, foggy, foggy]))
+    # Each reading is evaluated about 5 times, but counts once: the first foggy reading
+    # alone doesn't start fog, and a dry one starts the count again.
+    assert [r["fan_status"] for r in reports] == ["failsafe", "normal", "normal", "normal", "fog"]
+    assert reports[-1] == _report("fog", 40, 0, 1)
 
 
 def test_heat_overrides_fog() -> None:
     exhaust, intake = FakePwm(), FakePwm()
     reports, _ = asyncio.run(_run(exhaust, intake, _settings(), [_readings(30, 20, 97)]))
-    assert reports[1] == _report(False, 100, 100, 10, True)
+    assert reports[1] == _report("heat", 100, 100, 10)
 
 
 def test_a_missing_reading_overrides_fog() -> None:
     exhaust, intake = FakePwm(), FakePwm()
     reports, _ = asyncio.run(_run(exhaust, intake, _settings(), [_readings(None, 20, 97)]))
-    assert reports[1] == _report(True, 100, 0, None, True)
+    assert reports[1] == _report("failsafe", 100, 0, None)
     assert exhaust.duties == [100, 100]
 
 
@@ -246,19 +268,30 @@ def test_the_intake_fans_stay_on_for_their_minimum_time() -> None:
     settings = _settings(intake_min_on_s=0.3)
     reports, _ = asyncio.run(_run(exhaust, intake, settings, [hot] + [cool] * 7))
     assert intake.duties == [0, 100, 0, 0]
-    assert reports[2] == _report(False, 100, 100, 1, False)  # at 0.15 s: held on
-    assert reports[-1] == _report(False, 100, 0, 1, False)  # at 0.45 s: off
+    assert reports[2] == _report("heat_hold", 100, 100, 1)  # at 0.15 s: held on
+    assert reports[-1] == _report("normal", 100, 0, 1)  # at 0.45 s: off
 
 
-def test_fog_mode_holds_each_state_for_its_minimum_time() -> None:
+def test_fog_mode_lasts_its_minimum_time() -> None:
     exhaust, intake = FakePwm(), FakePwm()
     foggy, dry = _readings(21, 20, 96), _readings(21, 20, 50)
-    # Fog from 0.05 s (the first change doesn't wait), dry from 0.1 s: held until 0.35 s.
-    settings = _settings(fog_min_s=0.3)
+    # Fog from 0.05 s, dry from 0.1 s: held until 0.35 s.
+    settings = _settings(fog_min_s=0.3, min_duty_pct=40)
     reports, _ = asyncio.run(_run(exhaust, intake, settings, [foggy] + [dry] * 7))
-    assert exhaust.duties == [100, 0, 100, 100]
-    assert reports[2] == _report(False, 0, 0, 1, True)  # at 0.15 s: held
-    assert reports[-1] == _report(False, 100, 0, 1, False)  # at 0.45 s: over
+    assert exhaust.duties == [100, 40, 100, 100]
+    assert reports[2] == _report("fog_hold", 40, 0, 1)  # at 0.15 s: held
+    assert reports[-1] == _report("normal", 100, 0, 1)  # at 0.45 s: over
+
+
+def test_fog_mode_cant_start_again_until_the_minimum_on_time() -> None:
+    exhaust, intake = FakePwm(), FakePwm()
+    foggy, dry = _readings(21, 20, 96), _readings(21, 20, 50)
+    # Fog from 0.05 s, over at 0.1 s, foggy again from 0.15 s: can't start until 0.4 s.
+    settings = _settings(intake_min_on_s=0.3, min_duty_pct=40)
+    reports, _ = asyncio.run(_run(exhaust, intake, settings, [foggy, dry] + [foggy] * 6))
+    assert reports[1]["fan_status"] == "fog"  # at 0.1 s
+    assert reports[3] == _report("fog_lockout", 100, 0, 1)  # at 0.2 s: held off
+    assert reports[-1] == _report("fog", 40, 0, 1)  # at 0.45 s: fog again
 
 
 def test_fans_go_to_failsafe_when_readings_go_stale() -> None:
@@ -293,16 +326,17 @@ def test_analog_speed_follows_the_temperature_difference() -> None:
     assert [r["fan_intake_duty_pct"] for r in reports] == [0, 0, 0, 100, 70, 0]
 
 
-def test_a_fan_set_that_turns_on_is_kick_started() -> None:
+def test_a_fan_set_starting_from_standstill_is_kick_started() -> None:
     exhaust, intake = FakePwm(), FakePwm()
-    foggy, dry = _readings(21, 20, 96), _readings(21, 20, 50)
-    settings = _settings(analog=True, min_duty_pct=40, kickstart_s=0.1)
-    reports, _ = asyncio.run(_run(exhaust, intake, settings, [foggy, dry, dry, dry]))
-    # 100 % (failsafe) at the start; off in fog; back on after it at 100 % for 0.1 s
-    # (from 0.1 s), then its speed; 100 % again on stop.
-    assert exhaust.duties == [100, 0, 100, 40, 100]
+    cool, warmer = _readings(21, 20, 50), _readings(25.5, 20, 50)
+    # A minimum of 0 stops the exhaust fans at or below OFF.
+    settings = _settings(analog=True, min_duty_pct=0, kickstart_s=0.1)
+    reports, _ = asyncio.run(_run(exhaust, intake, settings, [cool, warmer, warmer, warmer]))
+    # 100 % (failsafe) at the start; stopped at 1 °C; at 5.5 °C, 100 % for 0.1 s (from
+    # 0.1 s), then its speed; 100 % again on stop.
+    assert exhaust.duties == [100, 0, 100, 50, 100]
     assert reports[2]["fan_exhaust_duty_pct"] == 100  # at 0.15 s: kick-starting
-    assert reports[4]["fan_exhaust_duty_pct"] == 40  # at 0.25 s: at its speed
+    assert reports[4]["fan_exhaust_duty_pct"] == 50  # at 0.25 s: at its speed
 
 
 def test_analog_runs_at_full_speed_while_a_reading_is_missing() -> None:

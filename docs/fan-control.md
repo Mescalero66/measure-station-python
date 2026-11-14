@@ -21,7 +21,7 @@ Which sets run, in priority order:
 |---|---|---|---|
 | **Heat** | The temperature difference has reached ON, until it reaches OFF | On | On |
 | **Failsafe** | A reading fan control needs is missing or out of date | On (100 %) | Off |
-| **Fog** | The humidity has reached FOG ON, until it reaches FOG OFF | Off | Off |
+| **Fog** | The humidity has reached FOG ON, until it reaches FOG OFF | Slow (50 %) | Off |
 | **Normal** | Otherwise | On | Off |
 
 When the station stops, it leaves the fans in the failsafe state: exhaust at 100 %,
@@ -48,7 +48,7 @@ remove that, set `PROBE_TEMPERATURE_OFFSET_C` in the Calibration section of
 |---|---|---|
 | `FAN_TEMPERATURE_DIFFERENCE_ON_C` | 8.0 | Heat mode starts at this difference |
 | `FAN_TEMPERATURE_DIFFERENCE_OFF_C` | 3.0 | ...and ends at this one; in between, it stays as it was |
-| `FAN_INTAKE_MIN_ON_S` | 300 (5 minutes) | Once on, the intake fans stay on at least this long |
+| `FAN_INTAKE_MIN_ON_S` | 120 (2 minutes) | Once on, the intake fans stay on at least this long (also the gap after fog mode, below) |
 
 - **The minimum on time** stops the intake fans switching with every 1-minute reading,
   and lets the parts that hold the heat (the power supply, the Pi, the regulators) cool
@@ -79,26 +79,39 @@ station itself:
 ## Fog
 
 `FAN_HUMIDITY_SOURCE`'s `humidity_pct` (the CHT8305, in the air drawn in at the bottom)
-turns fog mode on. Fog mode turns **both** sets **off**:
+turns fog mode on. Fog mode **slows the exhaust fans** to `FAN_ANALOG_MIN_DUTY_PCT`
+(50 %, in either `FAN_MODE`) and keeps the intake fans off:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `FAN_FOG_ON_PCT` | 95.0 | Fog mode starts at this humidity |
-| `FAN_FOG_OFF_PCT` | 90.0 | ...and ends at this one |
-| `FAN_FOG_MIN_S` | 1800 (30 minutes) | Fog mode stays on, or off, at least this long |
+| `FAN_FOG_ON_PCT` | 95.0 | Fog mode starts at this humidity... |
+| `FAN_FOG_ON_READINGS` | 2 | ...once this many readings in a row reach it |
+| `FAN_FOG_MIN_S` | 900 (15 minutes) | Fog mode lasts at least this long... |
+| `FAN_FOG_OFF_PCT` | 90.0 | ...then ends at this humidity |
+| `FAN_INTAKE_MIN_ON_S` | 120 (2 minutes) | Once over, fog mode can't start again for this long |
 
-- **Why off, not on:** the enclosure's air is outside air warmed by the electronics.
-  Each 1 °C of warming lowers its relative humidity by about 6 % of its value, so the
-  less air flows through, the drier the enclosure stays. More airflow wouldn't remove
-  any moisture, since the outside air is where the moisture comes from, but it would
-  draw in more mist droplets.
-- **The fans don't need to run for air to keep flowing.** The warm enclosure draws air in
-  at the bottom and lets it out at the top by itself, more slowly, so the sensors still
-  see outside air.
-- **Why the minimum time:** with the fans off, the air at the CHT8305 warms a little, so
-  it reads drier, and fog mode could end straight away. Holding each state for 30
-  minutes, plus the 5 % gap between ON and OFF, keeps it from switching back and forth.
-- **Heat mode overrides fog mode,** and so does a missing reading.
+For example: readings of 96 % at 06:00 and 06:01 start fog mode at 06:01. It lasts until
+at least 06:16, then ends at the first reading of 90 % or less. After that, the exhaust
+fans run at full speed for at least 2 minutes, even if the humidity is back at 95 %.
+
+- **Why slower, not faster:** the enclosure's air is outside air warmed by the
+  electronics. Each 1 °C of warming lowers its relative humidity by about 6 % of its
+  value, so the less air flows through, the drier the enclosure stays. More airflow
+  wouldn't remove any moisture, since the outside air is where the moisture comes from,
+  but it would draw in more mist droplets.
+- **Why not off:** with no airflow, the electronics' heat builds up around the sensors,
+  so their readings come out warm for as long as fog mode lasts. The CHT8305 also
+  warms and reads drier, which could end fog mode early. A slow exhaust keeps outside
+  air moving past the sensors.
+- **Why two readings in a row:** so one spiked reading doesn't slow the fans for
+  15 minutes. Real fog starts fog mode about a minute later than it would on one reading.
+- **Why the minimum times:** they stop fog mode switching on and off with every
+  1-minute reading, together with the 5 % gap between ON and OFF.
+- **Heat mode overrides fog mode,** and so does a missing reading. A missing humidity
+  reading ends fog mode, and the count of readings in a row starts again.
+- **`FAN_ANALOG_MIN_DUTY_PCT` must keep the exhaust fans turning,** since fog mode uses it
+  in binary mode too. The fans are already turning when fog mode slows them, so they
+  get no kick-start.
 
 ## Binary or Analog
 
@@ -114,26 +127,27 @@ turns fog mode on. Fog mode turns **both** sets **off**:
 | 5.5 °C, rising | 75 % | Off |
 | 8 °C (ON) and above | 100 % | On, at 100 % |
 | 5.5 °C, falling | 75 % | 75 % |
-| 3 °C (OFF) and below, after at least 5 minutes | 50 % | Off |
+| 3 °C (OFF) and below, after at least 2 minutes | 50 % | Off |
 
 In analog mode, the exhaust fans idle at the minimum in normal running, which is quieter
 and draws in less dust, and speed up as heat builds. The intake fans only come on at ON,
 where the speed is already 100 %, so they always start at full power. While a reading is
 missing, the exhaust fans run at 100 %.
 
-- **Kick-start:** a fan set that turns on runs at 100 % for `FAN_KICKSTART_S` (3 s)
-  first, then at its speed. A fan that starts reliably at full power can stall from
-  standstill at a low duty cycle, as the exhaust fans would after fog mode. It applies
-  in binary mode too, where it changes nothing.
+- **Kick-start:** a fan set that starts from standstill (0 %) runs at 100 % for
+  `FAN_KICKSTART_S` (3 s) first, then at its speed. A fan that starts reliably at full
+  power can stall from standstill at a low duty cycle. With the defaults, the intake
+  fans always start at 100 % anyway; it matters if `FAN_ANALOG_MIN_DUTY_PCT` is 0, which
+  stops the exhaust fans at or below OFF (and in fog).
 - **`FAN_ANALOG_MIN_DUTY_PCT` must keep the exhaust fans turning once started.** Above
   that, it's a choice between airflow and noise (and dust drawn in). Test it by hand
   (see [Testing the Station](testing-the-station.md#do-the-fans-work)).
-- **`FAN_PWM_FREQUENCY_HZ`** (100 Hz) matters only in analog mode; at 0 % and 100 % the
-  output is steady. Switching a 2-wire fan's whole supply works best at a low frequency,
+- **`FAN_PWM_FREQUENCY_HZ`** (100 Hz) matters only at speeds between 0 and 100 % (analog
+  mode, and fog mode); at 0 % and 100 % the output is steady. Switching a 2-wire fan's whole supply works best at a low frequency,
   which its motor electronics can follow. If the fans hum, tick or run unevenly, try 25
   to 50 Hz.
 - **Speed changes aren't logged:** the speed can change with every reading. The log
-  records each change of which sets are on, and why.
+  records each change of `fan_status` (below) and which sets are on.
 
 ## When a Reading Is Missing
 
@@ -151,16 +165,31 @@ report, once a minute:
 
 | Key | Meaning |
 |---|---|
-| `fan_failsafe` | `true` while a reading fan control needs is missing or out of date |
-| `fan_exhaust_duty_pct` | The exhaust fans' duty cycle, 0 to 100 % |
+| `fan_status` | Why the fans are as they are (below) |
+| `fan_exhaust_duty_pct` | The exhaust fans' duty cycle, 0 to 100 %; `FAN_ANALOG_MIN_DUTY_PCT` (50) in fog |
 | `fan_intake_duty_pct` | The intake fans' duty cycle, 0 to 100 %; above 0, the sensors' air may be slightly warm |
 | `fan_temp_diff_c` | The DS18B20 probe's temperature minus the CHT8305's, in °C |
-| `fan_fog` | Whether the humidity has turned fog mode on (it may be `true` while heat mode or the failsafe overrides it) |
 
-Each is `null` while it isn't known: all of them while fan control isn't running, and
-`fan_temp_diff_c` and `fan_fog` while their readings are missing. The DS18B20 itself
-isn't published (`"publish": False` in its `SENSORS` entry); the CHT8305 is, as the
-`humidity` source. See [`health`](server-pi-interface.md#health) for every key.
+`fan_status` is the mode, or a hold within it while a minimum time is what decides it:
+
+| `fan_status` | Meaning |
+|---|---|
+| `normal` | Normal mode |
+| `heat` | Heat mode: the difference has reached ON and not yet fallen to OFF |
+| `heat_hold` | The difference is back at OFF, but the intake fans haven't run `FAN_INTAKE_MIN_ON_S` yet |
+| `fog` | Fog mode |
+| `fog_hold` | The humidity is back at FOG OFF, but fog mode hasn't lasted `FAN_FOG_MIN_S` yet |
+| `fog_lockout` | The humidity would start fog mode, but it ended less than `FAN_INTAKE_MIN_ON_S` ago (fans as in normal mode) |
+| `failsafe` | A reading fan control needs is missing or out of date |
+| `starting` | Fan control hasn't set the fans yet (at most the first report after a start) |
+| `error` | Fan control has stopped or failed (e.g. a PWM output): the fans are in an unknown state |
+
+Only the main reason shows: while heat mode or the failsafe overrides fog mode, the
+status is `heat` or `failsafe`. The other keys are `null` while they aren't known: all
+three while fan control isn't running (`starting` or `error`), and `fan_temp_diff_c`
+while its readings are missing. The DS18B20 itself isn't published (`"publish": False`
+in its `SENSORS` entry); the CHT8305 is, as the `humidity` source. See
+[`health`](server-pi-interface.md#health) for every key.
 
 The readings are re-evaluated every `FAN_CONTROL_INTERVAL_S` (10 s). The sensors read
 once a minute, so a new reading takes effect within 10 s of arriving.

@@ -97,6 +97,7 @@ def test_invalid_fan_settings_rejected() -> None:
         {"FAN_FOG_OFF_PCT": 95.0},
         {"FAN_CONTROL_INTERVAL_S": 0},
         {"FAN_INTAKE_MIN_ON_S": -1},
+        {"FAN_FOG_ON_READINGS": 0},
         {"FAN_TEMPERATURE_SOURCE": "humidity"},  # the same as the reference
         {"FAN_INTAKE_PWM_CHANNEL": 0},  # the same as the exhaust's
         {"FAN_MODE": "digital"},

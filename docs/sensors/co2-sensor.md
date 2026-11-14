@@ -12,12 +12,26 @@ A Sensirion SCD41 on I2C, e.g. the Adafruit SCD-41 board. It measures CO2 direct
 
 | SCD-41 board | Pi header pin |
 |---|---|
-| VIN | 1 (3.3 V) |
+| VIN | 2 or 4 (5 V) |
 | GND | 6 (GND) |
 | SCL | 5 (GPIO3, SCL1) |
 | SDA | 3 (GPIO2, SDA1) |
+| 3Vo | Not connected |
 
-- **A STEMMA QT / Qwiic cable** works instead, to the same pins.
+- **Power it from 5 V,** which takes its 175 mA pulses off the 3.3 V sensor supply. The
+  Adafruit board has its own 3.3 V regulator and I2C level shifting, so the chip still
+  runs at 3.3 V and the Pi only sees 3.3 V. Leave 3Vo (the regulator's output)
+  unconnected, so it isn't joined to the 3.3 V rail.
+- **Check the I2C pins before connecting them.** With the board on 5 V and its SDA and
+  SCL disconnected from the Pi, both should read about 3.3 V or less to GND. If either
+  reads about 5 V, its pull-ups go to VIN and would put 5 V on the Pi's GPIO pins: power
+  it from 3.3 V instead.
+- **A bare SCD41 (no regulator) must stay on 3.3 V.** Its I2C inputs need at least
+  0.65 × VDD for a high (datasheet Table 4): 3.25 V at 5 V, which the Pi's 3.3 V only
+  just reaches. It also allows only 30 mV of supply ripple, less than a switch-mode
+  supply's 5 V usually has.
+- **A STEMMA QT / Qwiic cable** carries 3.3 V from a Pi adapter; use it only if you power
+  the board from 3.3 V.
 - **Check it's on the bus:** `i2cdetect -y 1` should show `62`. The address is fixed.
 - **It can share the bus** with the [Air Quality Board](air-quality-board.md) and the
   [Pressure Sensor](pressure-sensor.md): none of their addresses overlap.

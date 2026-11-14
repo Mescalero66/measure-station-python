@@ -2,8 +2,8 @@
 
 Each fan set has its own PWM output. A fan set that's on runs at 100 % in binary mode;
 in analog mode, at a speed set by the temperature difference (:meth:`FanSettings.speed`).
-A fan set that turns on runs at 100 % for ``kickstart_s`` first, so that a low speed
-can't leave it stalled.
+A fan set that starts from standstill runs at 100 % for ``kickstart_s`` first, so that a
+low speed can't leave it stalled.
 Which fan sets are on, in priority order:
 
 1. Heat building up: the temperature difference (by default the DS18B20 probe at the
@@ -12,8 +12,10 @@ Which fan sets are on, in priority order:
    ``intake_min_on_s``.
 2. Failsafe: a source is missing or out of date (its sensor has missed two readings).
    Exhaust on, intake off.
-3. Fog: the humidity (by default the CHT8305's) has turned the ``fog`` switch on, which
-   then holds each state for at least ``fog_min_s``. Both fan sets off.
+3. Fog: the humidity (by default the CHT8305's) has reached ``fog.on`` on
+   ``fog_on_readings`` readings in a row. It lasts at least ``fog_min_s``, then until
+   the humidity reaches ``fog.off``; once over, it can't start again for
+   ``intake_min_on_s``. Exhaust slowed to ``min_duty_pct``, intake off.
 4. Normal: exhaust on, intake off, drawing outside air in through the bottom vents.
 
 The fans are left in the failsafe state (exhaust at 100 %, intake off) when the task
@@ -74,13 +76,17 @@ class FanSettings:
     reference: str  # ...minus this one's
     heat: FanSwitch  # on the temperature difference: both fan sets on
     humidity_source: str  # the sensor whose humidity_pct is read
-    fog: FanSwitch  # on the humidity: both fan sets off
+    fog: FanSwitch  # on the humidity: exhaust slowed to min_duty_pct, intake off
     interval_s: float
-    intake_min_on_s: float  # once on, the intake fans stay on at least this long
-    fog_min_s: float  # fog mode stays on, or off, at least this long
+    # Once on, the intake fans stay on at least this long; and once fog mode is over, it
+    # can't start again for this long.
+    intake_min_on_s: float
+    fog_min_s: float  # fog mode lasts at least this long
+    fog_on_readings: int = 1  # fog mode starts after this many readings in a row at fog.on
     analog: bool = False  # False: fans that are on run at 100 %
-    min_duty_pct: float = 0  # analog mode: the speed at or past heat.off
-    kickstart_s: float = 0  # a fan set that turns on runs at 100 % for this long first
+    # Analog mode: the speed at or past heat.off. In both modes: the exhaust's speed in fog.
+    min_duty_pct: float = 0
+    kickstart_s: float = 0  # a fan set starting from standstill runs at 100 % this long first
 
     def __post_init__(self) -> None:
         if self.source == self.reference:
@@ -89,6 +95,8 @@ class FanSettings:
             raise ValueError("interval_s must be > 0")
         if min(self.intake_min_on_s, self.fog_min_s, self.kickstart_s) < 0:
             raise ValueError("intake_min_on_s, fog_min_s and kickstart_s must be >= 0")
+        if self.fog_on_readings < 1:
+            raise ValueError("fog_on_readings must be >= 1")
         if not 0 <= self.min_duty_pct <= 100:
             raise ValueError("min_duty_pct must be 0-100")
 
@@ -131,28 +139,32 @@ class FanState:
     """Fan control's latest evaluation, for the health report.
 
     Written on the event loop by :func:`control_fan`, read there by the health report.
-    Everything is None while fan control isn't running (e.g. a PWM output failed), and
-    ``temp_diff_c`` and ``fog`` while their inputs are missing.
+
+    ``status`` is why the fans are as they are: a mode (``normal``, ``heat``, ``fog``,
+    ``failsafe``), or ``heat_hold``, ``fog_hold`` or ``fog_lockout`` while a minimum time
+    is what decides it (see :func:`control_fan`). Before fan control's first evaluation
+    it's ``starting``; once fan control has stopped or failed (e.g. a PWM output), it's
+    ``error``, and everything else is None. ``temp_diff_c`` is also None while its
+    inputs are missing.
     """
 
-    failsafe: bool | None = None
+    status: str = "starting"
     exhaust_duty_pct: int | None = None
     intake_duty_pct: int | None = None
     temp_diff_c: float | None = None
-    fog: bool | None = None
 
     def clear(self) -> None:
-        self.failsafe = self.exhaust_duty_pct = self.intake_duty_pct = None
-        self.temp_diff_c = self.fog = None
+        """Fan control has stopped: nothing is known except that it isn't running."""
+        self.status = "error"
+        self.exhaust_duty_pct = self.intake_duty_pct = self.temp_diff_c = None
 
     def health_values(self) -> dict[str, Any]:
         """``fan_*`` keys for the health report; a value is None when it isn't known."""
         return {
-            "fan_failsafe": self.failsafe,
+            "fan_status": self.status,
             "fan_exhaust_duty_pct": self.exhaust_duty_pct,
             "fan_intake_duty_pct": self.intake_duty_pct,
             "fan_temp_diff_c": self.temp_diff_c,
-            "fan_fog": self.fog,
         }
 
 
@@ -171,10 +183,13 @@ async def control_fan(
         await asyncio.to_thread(exhaust.open)
         await asyncio.to_thread(intake.open)
         log.info("Fan control started: exhaust on %r, intake on %r", exhaust, intake)
-        heat = fog = False  # the switches' states
-        fog_since = -math.inf  # time.monotonic() when fog mode last changed
-        intake_since = -math.inf  # ...and when the intake fans last turned on
+        heat = fog = False  # the modes' states
+        fog_since = fog_ended = -math.inf  # time.monotonic() when fog mode started, ended
+        humid_readings = 0  # humidity readings in a row at fog.on
+        humidity_reading: int | None = None  # the last one counted (reading_number)
+        intake_since = -math.inf  # when the intake fans last turned on
         fans: tuple[bool, bool] | None = None  # (exhaust, intake): which are on
+        status: str | None = None  # the mode, or a hold within it (FanState.status)
         duties: tuple[int, ...] | None = None  # (exhaust, intake) as last set
         kick_until = [-math.inf, -math.inf]  # (exhaust, intake): 100 % until then
         missing: list[str] | None = None  # None until the first evaluation
@@ -184,12 +199,25 @@ async def control_fan(
             difference = settings.temperature_difference(latest)
             heat = difference is not None and settings.heat.is_on(difference, was_on=heat)
             humidity = settings.humidity(latest)
+            fog_held = fog_locked_out = False  # a minimum time is what decides fog mode
             if humidity is None:
-                fog, fog_since = False, -math.inf
+                fog, humid_readings, humidity_reading = False, 0, None
             else:
-                now_fog = settings.fog.is_on(humidity, was_on=fog)
-                if now_fog != fog and now - fog_since >= settings.fog_min_s:
-                    fog, fog_since = now_fog, now
+                # Count readings, not evaluations: the sensor reads less often than this.
+                reading = latest.reading_number(settings.humidity_source)
+                if reading != humidity_reading:
+                    humidity_reading = reading
+                    humid = settings.fog.is_on(humidity, was_on=False)  # at or past fog.on
+                    humid_readings = humid_readings + 1 if humid else 0
+                if fog:
+                    over = not settings.fog.is_on(humidity, was_on=True)  # at or past fog.off
+                    fog_held = over and now - fog_since < settings.fog_min_s
+                    if over and not fog_held:
+                        fog, fog_ended = False, now
+                elif humid_readings >= settings.fog_on_readings:
+                    fog_locked_out = now - fog_ended < settings.intake_min_on_s
+                    if not fog_locked_out:
+                        fog, fog_since = True, now
             now_missing = settings.missing(latest)
             _log_missing_change(missing, now_missing)
             missing = now_missing
@@ -197,43 +225,47 @@ async def control_fan(
             intake_was_on = fans is not None and fans[1]
             held = intake_was_on and now - intake_since < settings.intake_min_on_s
             if heat or held:
-                mode, now_fans = "heat", (True, True)
+                now_status, now_fans = "heat" if heat else "heat_hold", (True, True)
             elif missing:
-                mode, now_fans = "failsafe", (True, False)
+                now_status, now_fans = "failsafe", (True, False)
             elif fog:
-                mode, now_fans = "fog", (False, False)
+                now_status, now_fans = "fog_hold" if fog_held else "fog", (True, False)
             else:
-                mode, now_fans = "normal", (True, False)
+                now_status = "fog_lockout" if fog_locked_out else "normal"
+                now_fans = (True, False)
             if now_fans[1] and not intake_was_on:
                 intake_since = now
-            if now_fans != fans:
-                # Only on/off changes are logged: an analog speed changes every reading.
+            if now_status != status:
+                # Only status changes are logged: an analog speed changes every reading.
                 log.info(
-                    "Fans: exhaust %s, intake %s (%s; temp_diff_c=%s, humidity_pct=%s)",
+                    "Fans: %s, exhaust %s, intake %s (temp_diff_c=%s, humidity_pct=%s)",
+                    now_status,
                     *("on" if on else "off" for on in now_fans),
-                    mode,
                     difference,
                     humidity,
                 )
-                for i, on in enumerate(now_fans):
-                    if on and not (fans is not None and fans[i]):
-                        # From standstill: full power first, so a low speed can't stall it.
-                        kick_until[i] = now + settings.kickstart_s
-                fans = now_fans
+                status = now_status
+            fans = now_fans
 
             speed = settings.speed(difference)
+            in_fog = status in ("fog", "fog_hold")
+            speeds = (round(settings.min_duty_pct) if in_fog else speed, speed)
+            targets = [speeds[i] if on else _OFF_PCT for i, on in enumerate(fans)]
+            for i, target in enumerate(targets):
+                if target > _OFF_PCT and (duties is None or duties[i] == _OFF_PCT):
+                    # From standstill: full power first, so a low speed can't stall it.
+                    kick_until[i] = now + settings.kickstart_s
             now_duties = tuple(
-                (_FULL_PCT if now < kick_until[i] else speed) if on else _OFF_PCT
-                for i, on in enumerate(fans)
+                _FULL_PCT if target > _OFF_PCT and now < kick_until[i] else target
+                for i, target in enumerate(targets)
             )
             for i, output in enumerate((exhaust, intake)):
                 if duties is None or now_duties[i] != duties[i]:
                     await asyncio.to_thread(output.set_duty, now_duties[i])
             duties = now_duties
-            state.failsafe = bool(missing)
+            state.status = status
             state.exhaust_duty_pct, state.intake_duty_pct = duties
             state.temp_diff_c = difference
-            state.fog = None if humidity is None else fog
             # Wake when a kick-start ends, if that's sooner than the next evaluation.
             kicks = [t - now for t in kick_until if t > now]
             await asyncio.sleep(min([settings.interval_s, *kicks]))

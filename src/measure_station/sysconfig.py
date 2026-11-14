@@ -356,7 +356,7 @@ MQBOARD_CORRUPT_LOG_INTERVAL_S: float = 60.0
 # Two sets of 2-wire fans, each switched by its own Pi hardware PWM output and MOSFET
 # (docs/fan-control.md):
 #   exhaust (top):    normally on, drawing outside air in through the bottom vents and
-#                     past the sensors; off in fog.
+#                     past the sensors; slowed in fog.
 #   intake (bottom):  normally off; on with the exhaust fans when heat builds up.
 # Failsafe (a reading missing, or the station stopped): exhaust on, intake off.
 # The PWM overlay in config.txt chooses the pins: deploy/install.sh adds
@@ -378,15 +378,16 @@ FAN_PWM_INVERTED: bool = False
 #             at the minimum, and the intake fans always start at 100 %. 100 % while a
 #             reading is missing.
 FAN_MODE: str = "binary"
-# Analog only: the lowest speed, 0-100 %: the exhaust fans' speed in normal running. It
-# must keep them turning once started (see the kick-start below). In both modes, also
-# the intake fans' speed while read_sensor runs.
+# The lowest speed, 0-100 %: in analog mode, the exhaust fans' speed in normal running.
+# In both modes, the exhaust fans' speed in fog, and the intake fans' speed while
+# read_sensor runs. It must keep them turning once started (see the kick-start below).
 FAN_ANALOG_MIN_DUTY_PCT: float = 50.0
-# A fan set that turns on runs at 100 % for this long first, then at its speed, so a
-# low speed can't leave it stalled from standstill. 0 = no kick-start.
+# A fan set that starts from standstill runs at 100 % for this long first, then at its
+# speed, so a low speed can't leave it stalled. 0 = no kick-start.
 FAN_KICKSTART_S: float = 3.0
-# Analog only (at 0 and 100 % the output is steady): low enough for a 2-wire fan's motor
-# electronics to keep up. If the fans hum or tick, try 25-50 Hz.
+# Only for speeds between 0 and 100 % (analog mode, and fog; at 0 and 100 % the output
+# is steady): low enough for a 2-wire fan's motor electronics to keep up. If the fans
+# hum or tick, try 25-50 Hz.
 FAN_PWM_FREQUENCY_HZ: float = 100
 
 # Heat: FAN_TEMPERATURE_SOURCE's "temperature_c" minus FAN_REFERENCE_SOURCE's, in °C;
@@ -397,19 +398,23 @@ FAN_REFERENCE_SOURCE: str = "humidity"  # the CHT8305, at the bottom
 FAN_TEMPERATURE_DIFFERENCE_ON_C: float = 8.0
 FAN_TEMPERATURE_DIFFERENCE_OFF_C: float = 3.0
 # Once on, the intake fans stay on at least this long, so they don't switch with each
-# 1-minute reading. 5 minutes lets the parts that hold the heat (power supply, Pi,
-# regulators) cool too, not only the air, so the difference doesn't spring straight back.
+# 1-minute reading, and the parts that hold the heat (power supply, Pi, regulators) cool
+# too, not only the air. Once fog mode is over, it can't start again for this long
+# either, so the exhaust fans run at full speed at least this long.
 FAN_INTAKE_MIN_ON_S: float = 120.0
 
 # Fog: FAN_HUMIDITY_SOURCE's "humidity_pct" (the CHT8305, in the air drawn in at the
-# bottom). Fog mode turns both fan sets off when it reaches ON, and ends when it reaches
-# OFF, so the electronics' heat keeps the enclosure drier and fewer mist droplets are
-# drawn in. Heat building up overrides it. With the fans off, the CHT8305's air warms a
-# little and it reads drier, so each state is held at least FAN_FOG_MIN_S.
+# bottom). Fog mode starts when FAN_FOG_ON_READINGS readings in a row reach ON (so one
+# spiked reading doesn't start it), lasts at least FAN_FOG_MIN_S, then ends when the
+# humidity reaches OFF. It slows the exhaust fans to FAN_ANALOG_MIN_DUTY_PCT, intake
+# off: less airflow draws in fewer mist droplets and lets the electronics' heat keep the
+# enclosure drier, while air still moves past the sensors so they don't read warm. Heat
+# building up overrides it.
 FAN_HUMIDITY_SOURCE: str = "humidity"  # the CHT8305
 FAN_FOG_ON_PCT: float = 95.0
 FAN_FOG_OFF_PCT: float = 90.0
-FAN_FOG_MIN_S: float = 1800.0
+FAN_FOG_ON_READINGS: int = 2
+FAN_FOG_MIN_S: float = 900.0
 
 # How often the readings are re-evaluated. The sensors read every 60 s, so this only
 # limits how soon a new reading takes effect. Fan control isn't published on its own:

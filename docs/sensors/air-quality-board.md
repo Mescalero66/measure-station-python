@@ -14,14 +14,20 @@ compensate its readings.
 
 | Board | Pi header pin |
 |---|---|
-| VIN | 1 (3.3 V) |
+| VIN | 2 or 4 (5 V) |
 | GND | 6 (GND) |
 | SDA | 3 (GPIO2, SDA1) |
 | SCL | 5 (GPIO3, SCL1) |
-| ADD, CS, INT | Not connected |
+| 3V3, ADD, CS, INT | Not connected |
 
-- **Power it from 3.3 V, not 5 V.** If the board's I2C pull-ups go to VIN, 5 V on VIN
-  would put 5 V on the Pi's GPIO pins.
+- **Power it from 5 V.** On 3.3 V its ENS160 kept stopping (after hours, then after
+  30 seconds); on 5 V it runs steadily. The board's own regulator makes 3.3 V for both
+  chips. Leave its 3V3 pin (the regulator's output) unconnected, so it isn't joined to
+  the 3.3 V rail.
+- **Check the I2C pins before connecting them.** With the board on 5 V and its SDA and
+  SCL disconnected from the Pi, both should read about 3.3 V or less to GND. If either
+  reads about 5 V, its pull-ups go to VIN and would put 5 V on the Pi's GPIO pins: don't
+  connect it that way.
 - **Leave CS unconnected (high).** Pulling it low switches the ENS160 to SPI until the
   next power cycle.
 - **Check both chips are on the bus:** `i2cdetect -y 1` should show `38` (AHT21) and

@@ -175,8 +175,8 @@ even-numbered pins along the board's edge. Only these pins are used:
 
 ```text
               inner row     edge row
- 3.3 V            [ 1]       [ 2]   5 V: never connect a sensor here
- SDA              [ 3]       [ 4]   5 V: never connect a sensor here
+ 3.3 V            [ 1]       [ 2]   5 V: air quality and CO2 boards only
+ SDA              [ 3]       [ 4]   5 V: air quality and CO2 boards only
  SCL              [ 5]       [ 6]   GND (ground)
  1-wire (GPIO4)   [ 7]       [ 8]
  GND              [ 9]       [10]   RX: the MQ gas board's TX wire
@@ -190,13 +190,20 @@ even-numbered pins along the board's edge. Only these pins are used:
 Pin numbers and GPIO numbers are different things: **pin 7 is GPIO4, pin 12 is GPIO18,
 and pin 35 is GPIO19**. The settings files use GPIO numbers; this guide uses pin numbers.
 
-**The I2C sensors all share four wires.** Every one of the seven I2C sensor boards
-connects to the same four pins: **3.3 V (pin 1), GND (pin 6), SDA (pin 3) and SCL
-(pin 5)**. Join them on a small proto-board or breadboard with four rails, one per
-signal, and run four wires from the rails to the Pi.
+**The I2C sensors all share four wires.** Five of the seven I2C sensor boards connect to
+the same four pins: **3.3 V (pin 1), GND (pin 6), SDA (pin 3) and SCL (pin 5)**. Join
+them on a small proto-board or breadboard with four rails, one per signal, and run four
+wires from the rails to the Pi. The **air quality and CO2 boards** use the GND, SDA and
+SCL rails too, but take their power from **5 V (pin 2 or 4)** instead of the 3.3 V rail.
 
-- **Never use the 5 V pins (2 and 4) for a sensor.** Several of these boards have no
-  voltage regulator, and 5 V can damage the sensor or the Pi.
+- **Only those two boards go on 5 V.** Each has its own 3.3 V regulator. The others
+  have none, and 5 V can damage the sensor or the Pi.
+- **Check the two 5 V boards' I2C pins before connecting them.** Power each board from
+  5 V with its SDA and SCL not yet connected, and measure the voltage from each to GND:
+  both should read **about 3.3 V or less**. If either reads about 5 V, the board would
+  put 5 V on the Pi's pins: don't connect it, and ask the station's builder.
+- **Leave their 3V3 / 3Vo pins unconnected.** Those are the boards' own regulator
+  outputs; joining them to the 3.3 V rail would put two regulators in parallel.
 - **Check the pull-up resistors before connecting the rails to the Pi.** The Pi 2B has
   1.8 kΩ pull-up resistors on SDA and SCL, and most sensor boards add their own. With
   seven boards they add up, and too strong a pull-up (too low a resistance) causes bus
@@ -207,7 +214,9 @@ signal, and run four wires from the rails to the Pi.
 
   Each should read **2.2 kΩ or more**. Together with the Pi's own 1.8 kΩ, that keeps the
   total at about 1 kΩ or more. If either reads lower, some boards' pull-ups must be
-  removed before you go on: ask the station's builder.
+  removed before you go on: ask the station's builder. (This doesn't see the air
+  quality and CO2 boards' pull-ups, which go to their own regulators. The builder can
+  measure those from each board's SDA and SCL to its 3V3 / 3Vo pin.)
 - Each sensor's page in [`sensors/`](sensors/) has its own wiring table, which names the
   board's pins.
 
@@ -215,9 +224,9 @@ signal, and run four wires from the rails to the Pi.
 |---|---|---|---|
 | Temperature | MCP9808 (DFRobot SEN0435) | `1f` | Leave the A0, A1, A2 and ALT pins unconnected. [Wiring](sensors/temperature-sensor.md) |
 | Light | BH1750 | `23` | Leave ADDR unconnected. Face it towards the sky. [Wiring](sensors/light-sensor.md) |
-| Air quality | ENS160 + AHT21 | `38` and `53` | Leave ADD, CS and INT unconnected. [Wiring](sensors/air-quality-board.md) |
+| Air quality | ENS160 + AHT21 | `38` and `53` | VIN to **5 V**. Leave 3V3, ADD, CS and INT unconnected. [Wiring](sensors/air-quality-board.md) |
 | Humidity | CHT8305 probe (DFRobot SEN0546) | `40` | Red 3.3 V, black GND, white SCL, yellow SDA. **The SCL wire must be white**: a green one means a different chip that the station can't read. [Wiring](sensors/humidity-sensor.md) |
-| CO2 | SCD41 | `62` | [Wiring](sensors/co2-sensor.md) |
+| CO2 | SCD41 | `62` | VIN to **5 V**. Leave 3Vo unconnected. [Wiring](sensors/co2-sensor.md) |
 | Particulates | SEN62 or SEN65 | `6b` | Either model works; the station detects which. Keep its cable under 10 cm if you can (50 cm at most). [Wiring](sensors/particulate-sensor.md) |
 | Pressure | BMP280 | `76` | Leave CSB and SDO unconnected. [Wiring](sensors/pressure-sensor.md) |
 

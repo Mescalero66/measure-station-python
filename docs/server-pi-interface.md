@@ -442,11 +442,10 @@ About 600 bytes (675 when `estimated`).
     "mqboard_bad_lines": 0,
     "mqboard_stale_sensors": [],
     "mqboard_held": 0,
-    "fan_failsafe": false,
+    "fan_status": "normal",
     "fan_exhaust_duty_pct": 100,
     "fan_intake_duty_pct": 0,
-    "fan_temp_diff_c": 1.25,
-    "fan_fog": false
+    "fan_temp_diff_c": 1.25
   }
 }
 ```
@@ -470,18 +469,32 @@ About 600 bytes (675 when `estimated`).
 | `mqboard_bad_lines` | integer | Corrupt lines from the board since the service started | It rises steadily: a wiring fault |
 | `mqboard_stale_sensors` | array of strings | Board sensors whose reading hasn't changed for 5 minutes, by board name (e.g. `["MQ4"]`) | Not empty |
 | `mqboard_held` | integer | Board readings held until they can be timestamped | Above 0 for more than 5 minutes |
-| `fan_failsafe` | boolean or null | Whether a reading fan control needs (the DS18B20 probe's temperature, or the `humidity` source's temperature or humidity) is missing or out of date, so the exhaust fans run at 100 % and the intake fans are off | `true` for more than a few minutes |
-| `fan_exhaust_duty_pct` | integer or null | The exhaust fans' (top) duty cycle, 0 to 100 %. Normally on (100 %, or lower if the station runs them by speed); 0 in fog | |
+| `fan_status` | string | Why the fans are as they are; one of the codes below | `error`; `failsafe` for more than a few minutes |
+| `fan_exhaust_duty_pct` | integer or null | The exhaust fans' (top) duty cycle, 0 to 100 %. Normally on (100 %, or lower if the station runs them by speed); slowed in fog (50 % by default) | |
 | `fan_intake_duty_pct` | integer or null | The intake fans' (bottom) duty cycle, 0 to 100 %. Normally 0; above 0 while heat builds up. **Data quality:** while above 0, the enclosure pushes air out past the sensors rather than drawing outside air in, so readings from sources inside it may be slightly warm (and their relative humidity slightly low) | Above 0 for hours: an exhaust fan may have failed |
 | `fan_temp_diff_c` | number or null | The DS18B20 probe's temperature (top of the enclosure) minus the `humidity` source's (bottom), in °C (2 decimals) | It keeps rising |
-| `fan_fog` | boolean or null | Whether the `humidity` source's humidity has turned fog mode on, which turns both fan sets off (unless heat mode or the failsafe overrides it) | |
+
+`fan_status` codes. Only the main reason shows: while heat mode or the failsafe
+overrides fog mode, it's `heat` or `failsafe`.
+
+| `fan_status` | Exhaust (top) | Intake (bottom) | Meaning |
+|---|---|---|---|
+| `normal` | On | Off | Normal running: outside air drawn in past the sensors |
+| `heat` | On | On | Heat building up in the enclosure (the temperature difference is high) |
+| `heat_hold` | On | On | The difference is back to normal, but the intake fans are kept on for their minimum time (2 minutes by default) |
+| `fog` | Slow (50 %) | Off | Fog: the `humidity` source's humidity is very high |
+| `fog_hold` | Slow (50 %) | Off | The humidity has dropped, but fog mode is kept on for its minimum time (15 minutes by default) |
+| `fog_lockout` | On | Off | The humidity would start fog mode, but it ended less than 2 minutes ago |
+| `failsafe` | 100 % | Off | A reading fan control needs (the DS18B20 probe's temperature, or the `humidity` source's temperature or humidity) is missing or out of date |
+| `starting` | Unknown | Unknown | Fan control hasn't set the fans yet; at most the first report after a start |
+| `error` | Unknown | Unknown | Fan control has stopped or failed (e.g. a PWM output); the station restarts it |
 
 - `cpu_temperature_c`, `load_1m`, `disk_free_mb`, `mem_available_mb` and `ram_usage_pct`
   are left out if the system can't report them.
 - The `mqboard_*` keys are left out if the MQ board is disabled on the station.
-- The `fan_*` keys are left out if fan control is disabled. Each is `null` while it isn't
-  known: all of them while fan control isn't running (e.g. a PWM output failed), and
-  `fan_temp_diff_c` and `fan_fog` while a reading they need is missing.
+- The `fan_*` keys are left out if fan control is disabled. The others are `null` while
+  they aren't known: all three while `fan_status` is `starting` or `error`, and
+  `fan_temp_diff_c` while a reading it needs is missing.
 - **Missing health is the main alarm.** If no `health` reading arrives for several
   minutes (by the server's own clock), the station is offline or stalled. Check the
   retained `status` topic too: `offline` after a clean stop or a dropped connection.

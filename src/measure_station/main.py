@@ -313,6 +313,7 @@ def fan_settings(cfg: Any) -> FanSettings:
         interval_s=cfg.FAN_CONTROL_INTERVAL_S,
         intake_min_on_s=cfg.FAN_INTAKE_MIN_ON_S,
         fog_min_s=cfg.FAN_FOG_MIN_S,
+        fog_on_readings=cfg.FAN_FOG_ON_READINGS,
         analog=cfg.FAN_MODE == "analog",
         min_duty_pct=cfg.FAN_ANALOG_MIN_DUTY_PCT,
         kickstart_s=cfg.FAN_KICKSTART_S,
