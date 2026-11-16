@@ -234,3 +234,4 @@ cad/_autosave-*
 cad/fp-info-cache
 cad/**/*-backups/*.zip
 cad/**/*-backups
+cad/*.lck
