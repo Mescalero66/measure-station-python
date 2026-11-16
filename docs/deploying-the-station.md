@@ -47,7 +47,7 @@ Contents:
 | A name for the Pi on the network (its hostname) | `mstn-2b` | Step 1 |
 | A username and password for logging in to the Pi | `mstn` | Step 1 |
 | The station ID: a short name that labels all its data | `mstn-2b` | Step 5 |
-| The IP address of a time server on your network (often the router) | `192.168.1.1` | Step 5 |
+| The IP address of a time server on your network (often the router) | `192.168.1.200` | Step 5 |
 | The MQTT broker's address, port, username and password | `192.168.1.20`, `1883` | Step 5. Leave these out until the server Pi exists. |
 
 The station ID may use only letters, digits, `.`, `_` and `-`. Choose it once and keep it:
